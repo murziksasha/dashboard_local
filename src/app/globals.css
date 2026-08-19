@@ -1,8 +1,21 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4f6f8;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --muted: #71717a;
+  --border: #e4e4e7;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --muted: #a1a1aa;
+  --border: #27272a;
 }
 
 @theme inline {
@@ -12,15 +25,22 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--border);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Kanban scrollbars */
+.board-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.board-scroll::-webkit-scrollbar-thumb {
+  background: #a1a1aa55;
+  border-radius: 999px;
 }

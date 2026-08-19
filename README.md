@@ -1,36 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dashboard Local
 
-## Getting Started
+Локальний Jira-подібний трекер задач для команди (~50 користувачів). Працює на одному Windows PC і роздається в локальній мережі через браузер.
 
-First, run the development server:
+## Можливості
+
+- Проєкти, команди, ролі (Admin / Project Lead / Member / Viewer)
+- Issues: Epic, Story, Task, Bug, Sub-task
+- Kanban, список, backlog + спринти
+- Коментарі, вкладення (до 25 МБ), activity log, in-app сповіщення
+- Custom fields, issue links, watchers, story points, work log
+- Дашборди (особистий і проєктний)
+- Автобекап SQLite + CSV export + dump/restore
+
+## Вимоги
+
+- Node.js 22+ (рекомендовано 24; використовується вбудований `node:sqlite`)
+- Windows / Linux / macOS
+
+## Швидкий старт
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Відкрийте `http://localhost:3000` і пройдіть setup-майстер (створення адміністратора).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Опція «демо-проєкт» створює проєкт `DEMO` і користувача `demo` / `demo1234`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Доступ у локальній мережі
 
-## Learn More
+1. Запуск сервера на всіх інтерфейсах уже налаштований:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run build
+npm start
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Сервер слухає `0.0.0.0:3000`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+2. Дізнайтесь IP машини-сервера (`ipconfig` → IPv4).
+3. На інших ПК відкрийте `http://SERVER_IP:3000`.
+4. Дозвольте порт у Windows Firewall:
 
-## Deploy on Vercel
+```powershell
+New-NetFirewallRule -DisplayName "Dashboard Local" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Порт змінюється через змінну середовища `PORT` (Next.js читає її автоматично, за замовчуванням `3000`). Приклад:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```powershell
+$env:PORT=8080; npm start
+```
+
+Див. також `.env.example`.
+
+## Дані та бекапи
+
+- База: `data/dashboard.db`
+- Файли: `data/uploads/`
+- Бекапи: `data/backups/`
+
+Ручний бекап:
+
+```bash
+npm run backup
+```
+
+Або в UI: **Адмін → Бекапи**.
+
+Cold backup: скопіюйте всю папку `data/`.
+
+## Стек
+
+- Next.js 15 (App Router) + TypeScript + Tailwind CSS
+- SQLite через `node:sqlite` (WAL)
+- Локальна автентифікація (scrypt + cookie sessions), опційний LDAP bind
+- PWA (manifest + service worker)
+- Expo-клієнт у `mobile/` (REST API)
+
+## Додаткові можливості
+
+- Multi-assignee, Kanban swimlanes (assignee/epic), JQL, Gantt (Timeline + Dependencies)
+- LDAP: **Адмін → Налаштування**
+- Мобільний клієнт: див. `mobile/README.md` (upload вкладень, Expo push)
+- Тести: `npm test`
+
+## Ролі
+
+| Роль | Можливості |
+|------|------------|
+| Admin | Користувачі, команди, бекапи, усі проєкти |
+| Project Lead | Налаштування проєкту, статуси, спринти, учасники |
+| Member | Створення/редагування задач, DnD, work log, файли |
+| Viewer | Перегляд + коментарі |
