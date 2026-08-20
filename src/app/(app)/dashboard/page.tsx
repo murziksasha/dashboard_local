@@ -3,8 +3,16 @@ import { WidgetControls } from "@/components/dashboard/widget-controls";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth";
+import {
+  countAssignedOpen,
+  countAssignedOverdue,
+  listAssignedOpen,
+  listAssignedOverdue,
+  listMyQueue,
+  listRecentIssuesForUser,
+} from "@/lib/dashboard-queries";
 import { ensurePersonalWidgets } from "@/lib/dashboard-widgets";
-import { all } from "@/lib/db";
+import { count } from "@/lib/db";
 import { listProjectsForUser } from "@/lib/projects";
 import { PRIORITY_LABELS } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
@@ -14,60 +22,26 @@ export default async function DashboardPage() {
   const projects = listProjectsForUser(user);
   const widgets = ensurePersonalWidgets(user.id);
 
-  const assigned = all<{
-    id: string;
-    key: string;
-    title: string;
-    priority: keyof typeof PRIORITY_LABELS;
-    project_id: string;
-    status_name: string;
-    due_date: string | null;
-  }>(
-    `SELECT i.id, i.key, i.title, i.priority, i.project_id, i.due_date, s.name as status_name
-     FROM issues i
-     JOIN statuses s ON s.id = i.status_id
-     JOIN issue_assignees ia ON ia.issue_id = i.id AND ia.user_id = ?
-     WHERE s.category != 'done'
-     ORDER BY i.updated_at DESC LIMIT 12`,
+  const assignedCount = countAssignedOpen(user.id);
+  const queue = listMyQueue(user.id);
+  const queueBuckets: Record<string, string> = {
+    overdue: "Прострочені",
+    today: "Сьогодні",
+    week: "Цей тиждень",
+    doing: "В процесі",
+    nodate: "Без дати",
+  };
+
+  const assigned = listAssignedOpen(user.id);
+  const overdueCount = countAssignedOverdue(user.id);
+  const overdue = listAssignedOverdue(user.id);
+
+  const recent = listRecentIssuesForUser(user, 10);
+
+  const unread = count(
+    `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read_at IS NULL`,
     [user.id],
   );
-
-  const overdue = all<{
-    id: string;
-    key: string;
-    title: string;
-    project_id: string;
-    due_date: string;
-  }>(
-    `SELECT i.id, i.key, i.title, i.project_id, i.due_date
-     FROM issues i
-     JOIN statuses s ON s.id = i.status_id
-     JOIN issue_assignees ia ON ia.issue_id = i.id AND ia.user_id = ?
-     WHERE i.due_date IS NOT NULL
-       AND i.due_date < date('now') AND s.category != 'done'
-     ORDER BY i.due_date ASC LIMIT 8`,
-    [user.id],
-  );
-
-  const recent = all<{
-    id: string;
-    key: string;
-    title: string;
-    project_id: string;
-    updated_at: string;
-  }>(
-    `SELECT i.id, i.key, i.title, i.project_id, i.updated_at
-     FROM issues i
-     JOIN project_members pm ON pm.project_id = i.project_id AND pm.user_id = ?
-     ORDER BY i.updated_at DESC LIMIT 10`,
-    [user.id],
-  );
-
-  const unread =
-    all<{ c: number }>(
-      `SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read_at IS NULL`,
-      [user.id],
-    )[0]?.c ?? 0;
 
   const enabled = new Set(
     widgets.filter((w) => w.enabled).map((w) => w.widget_type),
@@ -84,7 +58,12 @@ export default async function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-2">
               {assigned.length === 0 ? (
-                <p className="text-sm text-zinc-500">Немає відкритих призначень.</p>
+                <p className="text-sm text-zinc-500">
+                  Немає відкритих призначень.{" "}
+                  <Link href="/projects" className="text-sky-600 hover:underline">
+                    Відкрити проєкти
+                  </Link>
+                </p>
               ) : (
                 assigned.map((issue) => (
                   <Link
@@ -136,6 +115,9 @@ export default async function DashboardPage() {
               <CardTitle>Мої проєкти</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
+              {projects.length === 0 ? (
+                <p className="text-sm text-zinc-500">Немає доступних проєктів.</p>
+              ) : null}
               {projects.map((p) => (
                 <Link
                   key={p.id}
@@ -159,6 +141,9 @@ export default async function DashboardPage() {
               <CardTitle>Нещодавно оновлені</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
+              {recent.length === 0 ? (
+                <p className="text-sm text-zinc-500">Ще немає оновлень у доступних проєктах.</p>
+              ) : null}
               {recent.map((issue) => (
                 <Link
                   key={issue.id}
@@ -200,6 +185,30 @@ export default async function DashboardPage() {
         </p>
       </div>
 
+      {queue.length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Моя черга</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {queue.map((issue) => (
+              <Link
+                key={issue.id}
+                href={`/projects/${issue.project_id}/issues/${issue.id}`}
+                className="flex items-center justify-between rounded-lg border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50"
+              >
+                <span>
+                  <span className="font-medium text-sky-600">{issue.key}</span> {issue.title}
+                </span>
+                <span className="text-xs text-zinc-400">
+                  {queueBuckets[issue.bucket] || issue.bucket}
+                </span>
+              </Link>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader>
@@ -207,13 +216,13 @@ export default async function DashboardPage() {
               Мої відкриті задачі
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-3xl font-bold">{assigned.length}</CardContent>
+          <CardContent className="text-3xl font-bold">{assignedCount}</CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle className="text-sm font-medium text-zinc-500">Прострочені</CardTitle>
           </CardHeader>
-          <CardContent className="text-3xl font-bold text-rose-600">{overdue.length}</CardContent>
+          <CardContent className="text-3xl font-bold text-rose-600">{overdueCount}</CardContent>
         </Card>
         <Card>
           <CardHeader>

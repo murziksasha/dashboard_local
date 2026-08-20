@@ -2,9 +2,17 @@ import { WidgetControls } from "@/components/dashboard/widget-controls";
 import { ProjectNav } from "@/components/projects/project-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth";
+import {
+  countProjectIssues,
+  countSprintProgress,
+  createdVsDone as createdVsDoneQuery,
+  issuesByStatus,
+} from "@/lib/dashboard-queries";
 import { ensureProjectWidgets } from "@/lib/dashboard-widgets";
 import { all } from "@/lib/db";
-import { loadProjectContext } from "@/lib/project-page";
+import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
+import { listProjectSprints } from "@/lib/projects";
+import { formatActivity } from "@/lib/activity-format";
 import { formatDate } from "@/lib/utils";
 
 export default async function ProjectDashboardPage({
@@ -14,32 +22,14 @@ export default async function ProjectDashboardPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const ctx = loadProjectContext(user, id);
+  const ctx = loadProjectShell(user, id);
+  const { members } = loadProjectPeople(id);
+  const sprints = listProjectSprints(id);
   const widgets = ensureProjectWidgets(user.id, id);
   const enabled = new Set(widgets.filter((w) => w.enabled).map((w) => w.widget_type));
 
-  const byStatus = all<{ name: string; c: number }>(
-    `SELECT s.name, COUNT(i.id) as c
-     FROM statuses s
-     LEFT JOIN issues i ON i.status_id = s.id
-     WHERE s.project_id = ?
-     GROUP BY s.id
-     ORDER BY s.position`,
-    [id],
-  );
-
-  const createdVsDone = all<{ day: string; created: number; done: number }>(
-    `SELECT date(created_at) as day,
-            COUNT(*) as created,
-            SUM(CASE WHEN s.category = 'done' THEN 1 ELSE 0 END) as done
-     FROM issues i
-     JOIN statuses s ON s.id = i.status_id
-     WHERE i.project_id = ?
-     GROUP BY date(created_at)
-     ORDER BY day DESC
-     LIMIT 14`,
-    [id],
-  );
+  const byStatus = issuesByStatus(id);
+  const createdVsDone = createdVsDoneQuery(id);
 
   const activity = all<{
     action: string;
@@ -56,11 +46,13 @@ export default async function ProjectDashboardPage({
     [id],
   );
 
-  const activeSprint = ctx.sprints.find((s) => s.status === "active");
-  const sprintIssues = activeSprint
-    ? ctx.issues.filter((i) => i.sprint_id === activeSprint.id)
-    : [];
-  const sprintDone = sprintIssues.filter((i) => i.status_category === "done").length;
+  const activeSprint = sprints.find((s) => s.status === "active");
+  const issueTotal = countProjectIssues(id);
+  const sprintProgress = activeSprint
+    ? countSprintProgress(activeSprint.id)
+    : { total: 0, done: 0 };
+  const sprintTotal = sprintProgress.total;
+  const sprintDone = sprintProgress.done;
 
   return (
     <div className="space-y-4">
@@ -86,13 +78,13 @@ export default async function ProjectDashboardPage({
                 <CardHeader>
                   <CardTitle className="text-sm text-zinc-500">Усього задач</CardTitle>
                 </CardHeader>
-                <CardContent className="text-3xl font-bold">{ctx.issues.length}</CardContent>
+                <CardContent className="text-3xl font-bold">{issueTotal}</CardContent>
               </Card>
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm text-zinc-500">Учасники</CardTitle>
                 </CardHeader>
-                <CardContent className="text-3xl font-bold">{ctx.members.length}</CardContent>
+                <CardContent className="text-3xl font-bold">{members.length}</CardContent>
               </Card>
             </>
           ) : null}
@@ -107,7 +99,7 @@ export default async function ProjectDashboardPage({
                     <>
                       <p className="font-semibold">{activeSprint.name}</p>
                       <p className="text-sm text-zinc-500">
-                        {sprintDone}/{sprintIssues.length} done
+                        {sprintDone}/{sprintTotal} done
                       </p>
                     </>
                   ) : (
@@ -120,8 +112,8 @@ export default async function ProjectDashboardPage({
                   <CardTitle className="text-sm text-zinc-500">Прогрес спринту</CardTitle>
                 </CardHeader>
                 <CardContent className="text-3xl font-bold">
-                  {sprintIssues.length
-                    ? `${Math.round((sprintDone / sprintIssues.length) * 100)}%`
+                  {sprintTotal
+                    ? `${Math.round((sprintDone / sprintTotal) * 100)}%`
                     : "—"}
                 </CardContent>
               </Card>
@@ -177,11 +169,9 @@ export default async function ProjectDashboardPage({
             <CardContent className="space-y-2">
               {activity.map((a, idx) => (
                 <div key={idx} className="text-sm">
-                  <span className="font-medium">{a.name || "Система"}</span>{" "}
-                  <span className="text-zinc-500">{a.action}</span>{" "}
-                  {a.issue_key ? (
-                    <span className="text-sky-600">{a.issue_key}</span>
-                  ) : null}
+                  <span className="text-zinc-700 dark:text-zinc-300">
+                    {formatActivity(a.action, a.name, null, a.issue_key)}
+                  </span>
                   <span className="ml-2 text-xs text-zinc-400">
                     {formatDate(a.created_at, true)}
                   </span>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
   DndContext,
@@ -40,6 +41,7 @@ function Row({
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: item.id });
   const [, startTransition] = useTransition();
+  const router = useRouter();
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -63,7 +65,7 @@ function Row({
         onClick={() =>
           startTransition(async () => {
             await toggleWidgetAction(item.id, !item.enabled);
-            window.location.reload();
+            router.refresh();
           })
         }
       >

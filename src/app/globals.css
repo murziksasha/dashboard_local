@@ -8,6 +8,8 @@
   --card: #ffffff;
   --muted: #71717a;
   --border: #e4e4e7;
+  --primary: #0284c7;
+  --primary-hover: #0ea5e9;
 }
 
 .dark {
@@ -16,6 +18,8 @@
   --card: #18181b;
   --muted: #a1a1aa;
   --border: #27272a;
+  --primary: #0ea5e9;
+  --primary-hover: #38bdf8;
 }
 
 @theme inline {
@@ -32,7 +36,19 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, "Segoe UI", sans-serif;
+}
+
+html[data-density="compact"] .density-card {
+  padding: 0.5rem;
+}
+html[data-density="compact"] table th,
+html[data-density="compact"] table td {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+html[data-density="compact"] .kanban-grid {
+  --board-col: 15rem;
 }
 
 /* Kanban scrollbars */

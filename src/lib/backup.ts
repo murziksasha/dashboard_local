@@ -1,7 +1,24 @@
 import fs from "fs";
 import path from "path";
-import { getBackupsDir, getDbPath } from "./paths";
+import { getBackupsDir, getDbPath, getUploadsDir } from "./paths";
 import { all, getDb, resetDbConnection, settingGet, settingSet } from "./db";
+import { copyDirIfExists, dirSizeBytes, uploadsSnapshotDir } from "./uploads";
+
+function pruneBackupPair(backupsDir: string, dbName: string) {
+  try {
+    fs.unlinkSync(path.join(backupsDir, dbName));
+  } catch {
+    // ignore
+  }
+  try {
+    fs.rmSync(path.join(backupsDir, uploadsSnapshotDir(dbName)), {
+      recursive: true,
+      force: true,
+    });
+  } catch {
+    // ignore
+  }
+}
 
 export function createBackup(label = "manual"): string {
   const backupsDir = getBackupsDir();
@@ -14,12 +31,28 @@ export function createBackup(label = "manual"): string {
   } catch {
     // ignore
   }
-  fs.copyFileSync(getDbPath(), target);
+  try {
+    const escaped = target.replace(/'/g, "''");
+    getDb().exec(`VACUUM INTO '${escaped}'`);
+  } catch {
+    fs.copyFileSync(getDbPath(), target);
+  }
+  copyDirIfExists(getUploadsDir(), path.join(backupsDir, uploadsSnapshotDir(filename)));
   settingSet("last_backup_at", new Date().toISOString());
+  const keep = 7;
+  const autos = listBackups().filter((b) => b.name.includes("-auto-"));
+  for (const extra of autos.slice(keep)) {
+    pruneBackupPair(backupsDir, extra.name);
+  }
   return filename;
 }
 
-export function listBackups(): Array<{ name: string; size: number; mtime: string }> {
+export function listBackups(): Array<{
+  name: string;
+  size: number;
+  uploadsSize: number;
+  mtime: string;
+}> {
   const backupsDir = getBackupsDir();
   if (!fs.existsSync(backupsDir)) return [];
   return fs
@@ -30,6 +63,7 @@ export function listBackups(): Array<{ name: string; size: number; mtime: string
       return {
         name,
         size: st.size,
+        uploadsSize: dirSizeBytes(path.join(backupsDir, uploadsSnapshotDir(name))),
         mtime: st.mtime.toISOString(),
       };
     })
@@ -41,6 +75,12 @@ export function restoreBackup(filename: string) {
   if (!fs.existsSync(src)) throw new Error("BACKUP_NOT_FOUND");
   getDb().exec("PRAGMA wal_checkpoint(TRUNCATE);");
   fs.copyFileSync(src, getDbPath());
+  const snap = path.join(getBackupsDir(), uploadsSnapshotDir(path.basename(filename)));
+  if (fs.existsSync(snap)) {
+    const dest = getUploadsDir();
+    fs.rmSync(dest, { recursive: true, force: true });
+    copyDirIfExists(snap, dest);
+  }
   resetDbConnection();
 }
 
@@ -57,11 +97,14 @@ export function maybeAutoBackup() {
 export function issuesToCsv(projectId: string): string {
   const rows = all<Record<string, unknown>>(
     `SELECT i.key, i.type, i.title, i.priority, s.name as status,
-            au.name as assignee, i.due_date, i.story_points, i.created_at, i.updated_at
+            (SELECT GROUP_CONCAT(u.name, '; ')
+             FROM issue_assignees ia
+             JOIN users u ON u.id = ia.user_id
+             WHERE ia.issue_id = i.id) as assignees,
+            i.due_date, i.story_points, i.created_at, i.updated_at
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
-     LEFT JOIN users au ON au.id = i.assignee_id
-     WHERE i.project_id = ?
+     WHERE i.project_id = ? AND i.deleted_at IS NULL
      ORDER BY i.key`,
     [projectId],
   );
@@ -71,7 +114,7 @@ export function issuesToCsv(projectId: string): string {
     "title",
     "priority",
     "status",
-    "assignee",
+    "assignees",
     "due_date",
     "story_points",
     "created_at",

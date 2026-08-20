@@ -39,6 +39,7 @@ export function CreateBackupButton() {
 }
 
 export function RestoreBackupButton({ filename }: { filename: string }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -58,7 +59,7 @@ export function RestoreBackupButton({ filename }: { filename: string }) {
           startTransition(async () => {
             try {
               await restoreBackupAction(filename);
-              window.location.reload();
+              router.refresh();
             } catch {
               setError("Не вдалося відновити бекап.");
             }

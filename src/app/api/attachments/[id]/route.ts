@@ -37,10 +37,13 @@ export async function GET(
     return NextResponse.json({ error: "missing file" }, { status: 404 });
   }
   const buffer = fs.readFileSync(filePath);
+  const inline = new URL(req.url).searchParams.get("inline") === "1";
+  const mime = row.mime_type || "application/octet-stream";
+  const asInline = inline && mime.startsWith("image/");
   return new NextResponse(buffer, {
     headers: {
-      "Content-Type": row.mime_type || "application/octet-stream",
-      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+      "Content-Type": mime,
+      "Content-Disposition": `${asInline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
     },
   });
 }

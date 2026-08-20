@@ -38,3 +38,13 @@ function beforeRank(rank: string): string {
   }
   return `a${rank}`;
 }
+
+/** Compact lexicographic ranks for a whole column after fractional keys grow. */
+export function packedRanks(count: number): string[] {
+  if (count <= 0) return [];
+  const width = Math.max(2, String(Math.max(0, count - 1)).length);
+  return Array.from(
+    { length: count },
+    (_, i) => `b${String(i).padStart(width, "0")}`,
+  );
+}

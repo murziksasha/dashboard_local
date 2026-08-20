@@ -1,10 +1,17 @@
+import { Suspense } from "react";
 import { CreateIssueForm } from "@/components/issues/create-issue-form";
+import { IssueDrawerHost } from "@/components/issues/issue-drawer";
 import { IssueListTable } from "@/components/projects/issue-list-table";
 import { ProjectNav } from "@/components/projects/project-nav";
 import { requireUser } from "@/lib/auth";
+import { listProjectLabels } from "@/lib/issue-workspace";
+import { canComment } from "@/lib/permissions";
+import { ListFilters } from "@/components/projects/list-filters";
 import { all } from "@/lib/db";
-import { loadProjectContext } from "@/lib/project-page";
-import { ISSUE_TYPE_LABELS } from "@/lib/types";
+import { countIssues, listEpics, listIssues } from "@/lib/issues";
+import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
+import { listProjectSprints } from "@/lib/projects";
+import { ISSUE_TYPE_LABELS, type IssueFilter, type IssueType } from "@/lib/types";
 
 export default async function ProjectListPage({
   params,
@@ -16,27 +23,32 @@ export default async function ProjectListPage({
   const { id } = await params;
   const sp = await searchParams;
   const user = await requireUser();
-  const ctx = loadProjectContext(user, id);
+  const ctx = loadProjectShell(user, id);
+  const { users } = loadProjectPeople(id);
+  const sprints = listProjectSprints(id);
+  const epics = listEpics(id);
 
   const q = typeof sp.q === "string" ? sp.q : "";
   const type = typeof sp.type === "string" ? sp.type : "";
   const statusId = typeof sp.status === "string" ? sp.status : "";
   const assignee = typeof sp.assignee === "string" ? sp.assignee : "";
+  const sort = (typeof sp.sort === "string" ? sp.sort : "rank") as IssueFilter["sort"];
+  const dir = sp.dir === "desc" ? "desc" : "asc";
+  const page = Math.max(1, Number(sp.page || 1) || 1);
+  const pageSize = 50;
 
-  let issues = ctx.issues;
-  if (q) {
-    const qq = q.toLowerCase();
-    issues = issues.filter(
-      (i) =>
-        i.title.toLowerCase().includes(qq) ||
-        i.key.toLowerCase().includes(qq) ||
-        (i.description || "").toLowerCase().includes(qq),
-    );
-  }
-  if (type) issues = issues.filter((i) => i.type === type);
-  if (statusId) issues = issues.filter((i) => i.status_id === statusId);
-  if (assignee === "unassigned") issues = issues.filter((i) => !i.assignee_id);
-  else if (assignee) issues = issues.filter((i) => i.assignee_id === assignee);
+  const filter: IssueFilter = {
+    q: q || undefined,
+    types: type && type in ISSUE_TYPE_LABELS ? [type as IssueType] : undefined,
+    statusIds: statusId ? [statusId] : undefined,
+    assigneeIds: assignee ? [assignee] : undefined,
+    sort,
+    dir,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  };
+  const total = countIssues(id, filter);
+  const issues = listIssues(id, filter);
 
   const savedFilters = all<{
     id: string;
@@ -60,75 +72,56 @@ export default async function ProjectListPage({
           <CreateIssueForm
             projectId={ctx.project.id}
             statuses={ctx.statuses}
-            users={ctx.users}
-            sprints={ctx.sprints.filter((s) => s.status !== "closed")}
-            epics={ctx.epics.map((e) => ({ id: e.id, key: e.key, title: e.title }))}
+            users={users}
+            sprints={sprints.filter((s) => s.status !== "closed")}
+            epics={epics}
           />
         ) : null}
       </div>
       <ProjectNav projectId={ctx.project.id} />
 
-      <form className="grid gap-2 rounded-xl border border-zinc-200 bg-white p-3 md:grid-cols-5 dark:border-zinc-800 dark:bg-zinc-900">
-        <input
-          name="q"
-          defaultValue={q}
-          placeholder="Пошук..."
-          className="h-9 rounded-md border border-zinc-300 bg-transparent px-3 text-sm dark:border-zinc-700"
-        />
-        <select
-          name="type"
-          defaultValue={type}
-          className="h-9 rounded-md border border-zinc-300 bg-transparent px-3 text-sm dark:border-zinc-700"
-        >
-          <option value="">Усі типи</option>
-          {Object.entries(ISSUE_TYPE_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-        </select>
-        <select
-          name="status"
-          defaultValue={statusId}
-          className="h-9 rounded-md border border-zinc-300 bg-transparent px-3 text-sm dark:border-zinc-700"
-        >
-          <option value="">Усі статуси</option>
-          {ctx.statuses.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-        <select
-          name="assignee"
-          defaultValue={assignee}
-          className="h-9 rounded-md border border-zinc-300 bg-transparent px-3 text-sm dark:border-zinc-700"
-        >
-          <option value="">Усі виконавці</option>
-          <option value="unassigned">Не призначено</option>
-          {ctx.users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="submit"
-          className="h-9 rounded-md bg-sky-600 px-3 text-sm font-medium text-white"
-        >
-          Фільтрувати
-        </button>
-      </form>
-
-      <IssueListTable
+      <ListFilters
         projectId={id}
-        issues={issues}
+        q={q}
+        type={type}
+        statusId={statusId}
+        assignee={assignee}
+        sort={sort || "rank"}
+        dir={dir}
         statuses={ctx.statuses}
-        users={ctx.users}
+        users={users}
+        total={total}
+        page={page}
+        pageSize={pageSize}
+      />
+
+      <Suspense fallback={<p className="text-sm text-zinc-500">Список…</p>}>
+        <IssueListTable
+          projectId={id}
+          issues={issues}
+          statuses={ctx.statuses}
+          users={users}
+          canEdit={ctx.canEdit}
+          savedFilters={savedFilters}
+          queryJson={queryJson}
+          currentUserId={user.id}
+          sort={sort || "rank"}
+          dir={dir}
+        />
+      </Suspense>
+      <IssueDrawerHost
+        projectId={id}
+        projectKey={ctx.project.key}
+        statuses={ctx.statuses}
+        users={users}
+        sprints={sprints}
+        epics={epics}
+        labelSuggestions={listProjectLabels(id)}
         canEdit={ctx.canEdit}
-        savedFilters={savedFilters}
-        queryJson={queryJson}
+        canComment={canComment(user, id)}
         currentUserId={user.id}
+        currentUserName={user.name}
+        isAdmin={user.global_role === "admin"}
       />
     </div>
   );

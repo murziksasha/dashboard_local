@@ -1,7 +1,7 @@
 import { logActivity } from "./activity";
-import { setIssueAssignees } from "./assignees";
-import { all, get, getDb, nowIso, run } from "./db";
-import { createId, rankBetween } from "./id";
+import { getAssigneesMap, setIssueAssignees } from "./assignees";
+import { all, count, get, getDb, nowIso, run } from "./db";
+import { createId, packedRanks, rankBetween } from "./id";
 import { extractMentions, notifyMany } from "./notifications";
 import { bumpBoardVersion, getProjectById, listStatuses } from "./projects";
 import type {
@@ -12,7 +12,10 @@ import type {
   SessionUser,
 } from "./types";
 import { getProjectRole } from "./permissions";
+import { emitAppEvent } from "./events";
+import { removeIssueFts, upsertIssueFts } from "./search";
 import { assertTransitionAllowed } from "./workflow";
+import { snapshotProjectSprints } from "./reports";
 
 export type IssueRow = Issue & {
   status_name?: string;
@@ -22,6 +25,157 @@ export type IssueRow = Issue & {
   reporter_name?: string | null;
   labels?: string;
 };
+
+export type BoardIssueRow = {
+  id: string;
+  project_id: string;
+  key: string;
+  title: string;
+  type: IssueType;
+  priority: Priority;
+  status_id: string;
+  rank: string;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  assignee_names: string | null;
+  reporter_id: string | null;
+  parent_id: string | null;
+  epic_id: string | null;
+  sprint_id: string | null;
+  story_points: number | null;
+  due_date: string | null;
+  start_date: string | null;
+  created_at: string;
+  updated_at: string;
+  status_name?: string;
+  status_category?: string;
+  labels?: string;
+};
+
+export type EpicRef = { id: string; key: string; title: string };
+
+function chunkIds(ids: string[], size = 400): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+function labelsMap(issueIds: string[]): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  if (!issueIds.length) return map;
+  for (const part of chunkIds(issueIds)) {
+    const rows = all<{ issue_id: string; label: string }>(
+      `SELECT issue_id, label FROM issue_labels
+       WHERE issue_id IN (${part.map(() => "?").join(",")})
+       ORDER BY label`,
+      part,
+    );
+    for (const row of rows) {
+      (map[row.issue_id] ??= []).push(row.label);
+    }
+  }
+  return map;
+}
+
+function attachIssueExtras<T extends { id: string; assignee_name?: string | null }>(
+  rows: T[],
+): Array<T & { labels: string; assignee_names: string | null; assignee_name: string | null }> {
+  if (!rows.length) {
+    return rows as Array<
+      T & { labels: string; assignee_names: string | null; assignee_name: string | null }
+    >;
+  }
+  const ids = rows.map((r) => r.id);
+  const assignees = getAssigneesMap(ids);
+  const labels = labelsMap(ids);
+  return rows.map((row) => {
+    const people = assignees[row.id] ?? [];
+    return {
+      ...row,
+      labels: (labels[row.id] ?? []).join(", "),
+      assignee_names: people.map((a) => a.name).join(", ") || null,
+      assignee_name: people[0]?.name ?? row.assignee_name ?? null,
+    };
+  });
+}
+
+export function listEpics(projectId: string): EpicRef[] {
+  return all<EpicRef>(
+    `SELECT id, key, title FROM issues
+     WHERE project_id = ? AND type = 'epic' AND deleted_at IS NULL
+     ORDER BY rank ASC, created_at ASC`,
+    [projectId],
+  );
+}
+
+export function listBoardIssues(
+  projectId: string,
+  opts?: {
+    sprintId?: string;
+    includeEpics?: boolean;
+    excludeTypes?: IssueType[];
+    assigneeId?: string | "unassigned";
+    due?: "overdue";
+    type?: IssueType;
+    epicId?: string;
+    label?: string;
+  },
+): BoardIssueRow[] {
+  const where = ["i.project_id = ?", "i.deleted_at IS NULL"];
+  const params: unknown[] = [projectId];
+  if (opts?.sprintId) {
+    if (opts.includeEpics) {
+      where.push(`(i.sprint_id = ? OR i.type = 'epic')`);
+      params.push(opts.sprintId);
+    } else {
+      where.push(`i.sprint_id = ?`);
+      params.push(opts.sprintId);
+    }
+  }
+  if (opts?.excludeTypes?.length) {
+    where.push(`i.type NOT IN (${opts.excludeTypes.map(() => "?").join(",")})`);
+    params.push(...opts.excludeTypes);
+  }
+  if (opts?.type) {
+    where.push(`i.type = ?`);
+    params.push(opts.type);
+  }
+  if (opts?.epicId) {
+    where.push(`i.epic_id = ?`);
+    params.push(opts.epicId);
+  }
+  if (opts?.assigneeId === "unassigned") {
+    where.push(`NOT EXISTS (SELECT 1 FROM issue_assignees ia WHERE ia.issue_id = i.id)`);
+  } else if (opts?.assigneeId) {
+    where.push(
+      `EXISTS (SELECT 1 FROM issue_assignees ia WHERE ia.issue_id = i.id AND ia.user_id = ?)`,
+    );
+    params.push(opts.assigneeId);
+  }
+  if (opts?.due === "overdue") {
+    where.push(`i.due_date IS NOT NULL AND i.due_date < date('now') AND s.category != 'done'`);
+  }
+  if (opts?.label) {
+    where.push(
+      `EXISTS (SELECT 1 FROM issue_labels il WHERE il.issue_id = i.id AND il.label = ?)`,
+    );
+    params.push(opts.label);
+  }
+  const rows = all<BoardIssueRow>(
+    `SELECT i.id, i.project_id, i.key, i.type, i.title, i.status_id, i.priority,
+            i.assignee_id, i.reporter_id, i.parent_id, i.epic_id, i.sprint_id,
+            i.story_points, i.due_date, i.start_date, i.rank, i.created_at, i.updated_at,
+            s.name as status_name, s.category as status_category,
+            au.name as assignee_name
+     FROM issues i
+     JOIN statuses s ON s.id = i.status_id
+     LEFT JOIN users au ON au.id = i.assignee_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY i.rank ASC, i.created_at ASC`,
+    params,
+  );
+  return attachIssueExtras(rows);
+}
 
 function nextIssueKey(projectId: string): string {
   const db = getDb();
@@ -46,13 +200,13 @@ function nextIssueKey(projectId: string): string {
 function lastRank(projectId: string, statusId: string | null): string | null {
   if (statusId) {
     const row = get<{ rank: string }>(
-      `SELECT rank FROM issues WHERE project_id = ? AND status_id = ? ORDER BY rank DESC LIMIT 1`,
+      `SELECT rank FROM issues WHERE project_id = ? AND status_id = ? AND deleted_at IS NULL ORDER BY rank DESC LIMIT 1`,
       [projectId, statusId],
     );
     return row?.rank ?? null;
   }
   const row = get<{ rank: string }>(
-    `SELECT rank FROM issues WHERE project_id = ? AND sprint_id IS NULL ORDER BY rank DESC LIMIT 1`,
+    `SELECT rank FROM issues WHERE project_id = ? AND sprint_id IS NULL AND deleted_at IS NULL ORDER BY rank DESC LIMIT 1`,
     [projectId],
   );
   return row?.rank ?? null;
@@ -77,7 +231,7 @@ export function createIssue(params: {
   dueDate?: string | null;
   labels?: string[];
   actor: SessionUser;
-}): Issue {
+}): IssueRow {
   const statuses = listStatuses(params.projectId);
   const statusId =
     params.statusId ??
@@ -157,6 +311,9 @@ export function createIssue(params: {
     payload: { key, title: params.title, type: params.type },
   });
   bumpBoardVersion(params.projectId);
+  upsertIssueFts(id);
+  emitAppEvent({ type: "board", projectId: params.projectId, issueId: id });
+  snapshotProjectSprints(params.projectId);
   return getIssue(id)!;
 }
 
@@ -168,7 +325,7 @@ export function getIssue(id: string): IssueRow | undefined {
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id
      LEFT JOIN users ru ON ru.id = i.reporter_id
-     WHERE i.id = ?`,
+     WHERE i.id = ? AND i.deleted_at IS NULL`,
     [id],
   );
 }
@@ -180,11 +337,11 @@ export function getIssueLabels(issueId: string): string[] {
   ).map((r) => r.label);
 }
 
-export function listIssues(
+export function buildIssueWhere(
   projectId: string,
   filter: IssueFilter = {},
-): IssueRow[] {
-  const where: string[] = ["i.project_id = ?"];
+): { where: string; params: unknown[] } {
+  const where: string[] = ["i.project_id = ?", "i.deleted_at IS NULL"];
   const params: unknown[] = [projectId];
 
   if (filter.q) {
@@ -195,6 +352,10 @@ export function listIssues(
   if (filter.types?.length) {
     where.push(`i.type IN (${filter.types.map(() => "?").join(",")})`);
     params.push(...filter.types);
+  }
+  if (filter.excludeTypes?.length) {
+    where.push(`i.type NOT IN (${filter.excludeTypes.map(() => "?").join(",")})`);
+    params.push(...filter.excludeTypes);
   }
   if (filter.statusIds?.length) {
     where.push(`i.status_id IN (${filter.statusIds.map(() => "?").join(",")})`);
@@ -243,23 +404,54 @@ export function listIssues(
     );
     params.push(...filter.labels);
   }
+  return { where: where.join(" AND "), params };
+}
 
-  const rows = all<IssueRow>(
-    `SELECT i.*, s.name as status_name, s.category as status_category,
-            au.name as assignee_name, ru.name as reporter_name,
-            (SELECT GROUP_CONCAT(label, ', ') FROM issue_labels il WHERE il.issue_id = i.id) as labels,
-            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia
-               JOIN users u ON u.id = ia.user_id
-               WHERE ia.issue_id = i.id) as assignee_names
+const SORT_SQL: Record<NonNullable<IssueFilter["sort"]>, string> = {
+  rank: "i.rank ASC, i.created_at ASC",
+  key: "i.key",
+  updated: "i.updated_at",
+  created: "i.created_at",
+  due: "i.due_date",
+  priority: `CASE i.priority WHEN 'highest' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
+};
+
+export function listIssues(
+  projectId: string,
+  filter: IssueFilter = {},
+): IssueRow[] {
+  const { where, params } = buildIssueWhere(projectId, filter);
+  const sort = filter.sort && SORT_SQL[filter.sort] ? filter.sort : "rank";
+  let order = SORT_SQL[sort];
+  if (sort !== "rank") {
+    order = `${order} ${filter.dir === "desc" ? "DESC" : "ASC"}`;
+  }
+  let sql = `SELECT i.*, s.name as status_name, s.category as status_category,
+            au.name as assignee_name, ru.name as reporter_name
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id
      LEFT JOIN users ru ON ru.id = i.reporter_id
-     WHERE ${where.join(" AND ")}
-     ORDER BY i.rank ASC, i.created_at ASC`,
+     WHERE ${where}
+     ORDER BY ${order}`;
+  const qparams = [...params];
+  if (filter.limit != null) {
+    sql += ` LIMIT ?`;
+    qparams.push(filter.limit);
+    if (filter.offset) {
+      sql += ` OFFSET ?`;
+      qparams.push(filter.offset);
+    }
+  }
+  return attachIssueExtras(all<IssueRow>(sql, qparams));
+}
+
+export function countIssues(projectId: string, filter: IssueFilter = {}): number {
+  const { where, params } = buildIssueWhere(projectId, filter);
+  return count(
+    `SELECT COUNT(*) as c FROM issues i JOIN statuses s ON s.id = i.status_id WHERE ${where}`,
     params,
   );
-  return rows;
 }
 
 export function updateIssue(
@@ -392,6 +584,9 @@ export function updateIssue(
     payload: { changes, before },
   });
   bumpBoardVersion(issue.project_id);
+  upsertIssueFts(issueId);
+  emitAppEvent({ type: "issue", projectId: issue.project_id, issueId });
+  snapshotProjectSprints(issue.project_id);
   return getIssue(issueId)!;
 }
 
@@ -412,6 +607,20 @@ export function moveIssue(params: {
       toStatusId: params.statusId,
       actorRole: getProjectRole(params.actor, issue.project_id),
     });
+    const dest = get<{ wip_limit: number | null }>(
+      `SELECT wip_limit FROM statuses WHERE id = ?`,
+      [params.statusId],
+    );
+    if (dest?.wip_limit != null) {
+      const n = count(
+        `SELECT COUNT(*) as c FROM issues
+         WHERE status_id = ? AND deleted_at IS NULL AND id != ?`,
+        [params.statusId, issue.id],
+      );
+      if (n >= dest.wip_limit) {
+        throw new Error(`Ліміт WIP: ${dest.wip_limit}`);
+      }
+    }
   }
   const before = params.beforeId ? getIssue(params.beforeId) : null;
   const after = params.afterId ? getIssue(params.afterId) : null;
@@ -433,8 +642,31 @@ export function moveIssue(params: {
       rank,
     },
   });
+  if (rank.length > 32) {
+    rebalanceRanks(issue.project_id, params.statusId);
+  }
   bumpBoardVersion(issue.project_id);
+  emitAppEvent({
+    type: "board",
+    projectId: issue.project_id,
+    issueId: issue.id,
+    payload: { statusId: params.statusId },
+  });
+  snapshotProjectSprints(issue.project_id);
   return getIssue(params.issueId)!;
+}
+
+export function rebalanceRanks(projectId: string, statusId: string) {
+  const rows = all<{ id: string }>(
+    `SELECT id FROM issues
+     WHERE project_id = ? AND status_id = ? AND deleted_at IS NULL
+     ORDER BY rank ASC, created_at ASC`,
+    [projectId, statusId],
+  );
+  const ranks = packedRanks(rows.length);
+  rows.forEach((row, i) => {
+    run(`UPDATE issues SET rank = ? WHERE id = ?`, [ranks[i], row.id]);
+  });
 }
 
 export function addComment(params: {
@@ -454,9 +686,12 @@ export function addComment(params: {
 
   const mentions = extractMentions(params.body);
   if (mentions.length) {
-    const users = all<{ id: string; login: string }>(
-      `SELECT id, login FROM users WHERE login IN (${mentions.map(() => "?").join(",")})`,
-      mentions,
+    const wanted = new Set(mentions.map((m) => m.toLowerCase()));
+    const users = all<{ id: string; login: string; name: string }>(
+      `SELECT id, login, name FROM users WHERE active = 1`,
+    ).filter(
+      (u) =>
+        wanted.has(u.login.toLowerCase()) || wanted.has(u.name.toLowerCase()),
     );
     notifyMany(
       users.map((u) => u.id).filter((id) => id !== params.author.id),
@@ -490,5 +725,5 @@ export function addComment(params: {
     action: "comment.added",
     payload: { commentId: id },
   });
-  return id;
+  return { id, body: params.body, created_at: ts, author_id: params.author.id };
 }

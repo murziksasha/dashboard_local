@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { JQL_HELP, runJql } from "@/lib/jql";
-import { loadProjectContext } from "@/lib/project-page";
+import { loadProjectShell } from "@/lib/project-page";
 import { ISSUE_TYPE_LABELS, PRIORITY_LABELS } from "@/lib/types";
 
 export default async function JqlPage({
@@ -17,7 +17,7 @@ export default async function JqlPage({
   const { id } = await params;
   const sp = await searchParams;
   const user = await requireUser();
-  const ctx = loadProjectContext(user, id);
+  const ctx = loadProjectShell(user, id);
   const q = typeof sp.q === "string" ? sp.q : "status != Done ORDER BY updated DESC";
   const result = runJql(id, q, user.id);
 

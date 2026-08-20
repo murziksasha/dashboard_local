@@ -17,8 +17,8 @@ export default async function AdminBackupsPage() {
         <div>
           <h1 className="text-2xl font-bold">Бекапи</h1>
           <p className="text-sm text-zinc-500">
-            Автобекап створюється приблизно раз на добу під час роботи додатку. Також можна
-            зробити ручну копію SQLite.
+            Автобекап створюється приблизно раз на добу під час роботи додатку. Копія містить
+            SQLite і знімок папки вкладень.
           </p>
         </div>
         <form
@@ -48,6 +48,9 @@ export default async function AdminBackupsPage() {
                   <p className="text-sm font-medium">{b.name}</p>
                   <p className="text-xs text-zinc-500">
                     {formatDate(b.mtime, true)} · {Math.round(b.size / 1024)} КБ
+                    {b.uploadsSize
+                      ? ` · файли ${Math.round(b.uploadsSize / 1024)} КБ`
+                      : " · без знімка файлів"}
                   </p>
                 </div>
                 <div className="flex gap-2">

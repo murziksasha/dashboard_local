@@ -6,7 +6,7 @@ import {
   requireUser,
   verifyPassword,
 } from "@/lib/auth";
-import { get, nowIso, run } from "@/lib/db";
+import { get, nowIso, run, settingSet } from "@/lib/db";
 
 export async function updateProfileAction(formData: FormData) {
   const user = await requireUser();
@@ -44,5 +44,15 @@ export async function changeOwnPasswordAction(formData: FormData) {
     nowIso(),
     user.id,
   ]);
+  return { ok: true as const };
+}
+
+export async function updateNotifyPrefsAction(formData: FormData) {
+  const user = await requireUser();
+  const types = ["assigned", "comment", "mention", "status", "due_soon"];
+  const prefs: Record<string, boolean> = {};
+  for (const t of types) prefs[t] = formData.get(t) === "on";
+  settingSet(`notify_prefs_${user.id}`, JSON.stringify(prefs));
+  revalidatePath("/profile");
   return { ok: true as const };
 }

@@ -6,11 +6,14 @@
 
 - Проєкти, команди, ролі (Admin / Project Lead / Member / Viewer)
 - Issues: Epic, Story, Task, Bug, Sub-task
-- Kanban, список, backlog + спринти
+- Kanban, список, беклог + спринти, гант, календар, JQL
+- Drawer картки задачі, глобальний пошук (`Ctrl+K`)
 - Коментарі, вкладення (до 25 МБ), activity log, in-app сповіщення
+- Кошик видалених задач (30 днів, потім файли теж прибираються)
 - Custom fields, issue links, watchers, story points, work log
-- Дашборди (особистий і проєктний)
-- Автобекап SQLite + CSV export + dump/restore
+- Дашборди (особистий і проєктний), звіти: burndown / velocity / час
+- Автобекап SQLite **і вкладень** + CSV export + dump/restore
+- Ліміт спроб логіну, аудит входів (Адмін → Аудит)
 
 ## Вимоги
 
@@ -41,7 +44,17 @@ npm start
 
 2. Дізнайтесь IP машини-сервера (`ipconfig` → IPv4).
 3. На інших ПК відкрийте `http://SERVER_IP:3000`.
-4. Дозвольте порт у Windows Firewall:
+4. Для HTTPS у LAN поставте Caddy або nginx перед Next (сам додаток слухає HTTP). Приклад Caddy:
+
+```
+dashboard.lan {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+У `.env` тоді вкажіть `APP_BASE_URL=https://dashboard.lan` (посилання в листах і OIDC).
+
+5. Дозвольте порт у Windows Firewall:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Dashboard Local" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
@@ -67,7 +80,7 @@ $env:PORT=8080; npm start
 npm run backup
 ```
 
-Або в UI: **Адмін → Бекапи**.
+Або в UI: **Адмін → Бекапи**. Створюється пара `dashboard-….db` + `dashboard-….uploads/` (знімок вкладень). Restore з UI піднімає обидва, якщо знімок файлів є.
 
 Cold backup: скопіюйте всю папку `data/`.
 
@@ -94,3 +107,5 @@ Cold backup: скопіюйте всю папку `data/`.
 | Project Lead | Налаштування проєкту, статуси, спринти, учасники |
 | Member | Створення/редагування задач, DnD, work log, файли |
 | Viewer | Перегляд + коментарі |
+
+Аудит входів і бекапів: **Адмін → Аудит**. Звіти спринту: вкладка **Звіти** в проєкті.

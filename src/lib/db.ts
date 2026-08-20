@@ -21,6 +21,8 @@ function migrate(db: DatabaseSync) {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA synchronous = NORMAL;
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -286,19 +288,86 @@ function migrate(db: DatabaseSync) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id);
     CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status_id);
     CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(assignee_id);
     CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id);
     CREATE INDEX IF NOT EXISTS idx_issues_epic ON issues(epic_id);
+    CREATE INDEX IF NOT EXISTS idx_issues_project_rank ON issues(project_id, rank);
+    CREATE INDEX IF NOT EXISTS idx_issues_project_updated ON issues(project_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_issues_due ON issues(due_date);
+    CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(key);
     CREATE INDEX IF NOT EXISTS idx_issue_assignees_user ON issue_assignees(user_id);
     CREATE INDEX IF NOT EXISTS idx_activity_project ON activity_events(project_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_issue ON activity_events(issue_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
     CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(issue_id);
+    CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
+    CREATE INDEX IF NOT EXISTS idx_worklogs_issue ON worklogs(issue_id);
+    CREATE INDEX IF NOT EXISTS idx_worklogs_date ON worklogs(work_date);
+    CREATE INDEX IF NOT EXISTS idx_issue_labels_label ON issue_labels(label);
+    CREATE INDEX IF NOT EXISTS idx_cf_values_issue ON custom_field_values(issue_id);
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      login TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS app_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      project_id TEXT,
+      issue_id TEXT,
+      user_id TEXT,
+      payload_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sprint_snapshots (
+      sprint_id TEXT NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      remaining_points REAL NOT NULL DEFAULT 0,
+      remaining_issues INTEGER NOT NULL DEFAULT 0,
+      done_points REAL NOT NULL DEFAULT 0,
+      done_issues INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (sprint_id, day)
+    );
+
+    CREATE TABLE IF NOT EXISTS sprint_stats (
+      sprint_id TEXT PRIMARY KEY REFERENCES sprints(id) ON DELETE CASCADE,
+      committed_points REAL NOT NULL DEFAULT 0,
+      committed_issues INTEGER NOT NULL DEFAULT 0,
+      completed_points REAL NOT NULL DEFAULT 0,
+      completed_issues INTEGER NOT NULL DEFAULT 0,
+      captured_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, created_at);
+    CREATE INDEX IF NOT EXISTS idx_app_events_created ON app_events(created_at);
   `);
 
   ensureColumn(db, "issues", "start_date", "TEXT");
+  ensureColumn(db, "issues", "deleted_at", "TEXT");
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+        issue_id UNINDEXED, key, title, description, labels
+      );
+    `);
+  } catch {
+    // FTS5 may be unavailable in some node:sqlite builds
+  }
   // backfill assignees from legacy assignee_id
   db.exec(`
     INSERT OR IGNORE INTO issue_assignees (issue_id, user_id, position)
@@ -355,6 +424,12 @@ export function get<T = Row>(sql: string, params: unknown[] = []): T | undefined
 
 export function run(sql: string, params: unknown[] = []) {
   return getDb().prepare(sql).run(...params);
+}
+
+/** Scalar COUNT(*) helper — skips JSON round-trip used by all()/get(). */
+export function count(sql: string, params: unknown[] = []): number {
+  const row = getDb().prepare(sql).get(...params) as { c?: number } | undefined;
+  return Number(row?.c ?? 0);
 }
 
 export function settingGet(key: string): string | undefined {

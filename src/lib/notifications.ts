@@ -1,5 +1,6 @@
 import { createId } from "./id";
-import { all, nowIso, run } from "./db";
+import { all, nowIso, run, settingGet } from "./db";
+import { emitAppEvent } from "./events";
 import { dispatchExternalNotification } from "./notify-channels";
 
 export function notifyUser(params: {
@@ -9,6 +10,15 @@ export function notifyUser(params: {
   body?: string;
   link?: string;
 }) {
+  try {
+    const raw = settingGet(`notify_prefs_${params.userId}`);
+    if (raw) {
+      const prefs = JSON.parse(raw) as Record<string, boolean>;
+      if (prefs[params.type] === false) return;
+    }
+  } catch {
+    // ignore bad prefs
+  }
   run(
     `INSERT INTO notifications (id, user_id, type, title, body, link, read_at, created_at)
      VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
@@ -22,6 +32,11 @@ export function notifyUser(params: {
       nowIso(),
     ],
   );
+  emitAppEvent({
+    type: "notification",
+    userId: params.userId,
+    payload: { title: params.title, body: params.body, link: params.link },
+  });
   // fire-and-forget external channels
   void dispatchExternalNotification({
     userId: params.userId,
@@ -50,6 +65,6 @@ export function getUnreadCount(userId: string): number {
 }
 
 export function extractMentions(text: string): string[] {
-  const matches = text.matchAll(/@([a-zA-Z0-9._-]+)/g);
+  const matches = text.matchAll(/@([\p{L}\p{N}._-]+)/gu);
   return [...new Set([...matches].map((m) => m[1]))];
 }

@@ -230,6 +230,8 @@ export async function startSprintAction(projectId: string, sprintId: string) {
     sprintId,
     projectId,
   ]);
+  const { recordSprintCommit } = await import("@/lib/reports");
+  recordSprintCommit(sprintId);
   bumpBoardVersion(projectId);
   revalidatePath(`/projects/${projectId}`);
 }
@@ -241,10 +243,13 @@ export async function completeSprintAction(formData: FormData) {
   const moveTo = String(formData.get("moveTo") || "backlog");
   assertMinRole(user, projectId, "lead");
 
+  const { recordSprintComplete } = await import("@/lib/reports");
+  recordSprintComplete(sprintId);
+
   const incomplete = all<{ id: string }>(
     `SELECT i.id FROM issues i
      JOIN statuses s ON s.id = i.status_id
-     WHERE i.sprint_id = ? AND s.category != 'done'`,
+     WHERE i.sprint_id = ? AND s.category != 'done' AND i.deleted_at IS NULL`,
     [sprintId],
   );
 

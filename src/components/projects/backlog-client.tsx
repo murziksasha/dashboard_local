@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import {
   DndContext,
   PointerSensor,
   closestCenter,
+  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -21,6 +23,7 @@ import {
   assignToSprintAction,
   reorderBacklogAction,
 } from "@/app/actions/issues";
+import { useIssueDrawer } from "@/components/issues/issue-drawer";
 import {
   completeSprintAction,
   createSprintAction,
@@ -38,6 +41,9 @@ type Issue = {
   type: string;
   sprint_id: string | null;
   story_points: number | null;
+  priority?: string;
+  due_date?: string | null;
+  assignee_name?: string | null;
 };
 
 type Sprint = {
@@ -45,22 +51,23 @@ type Sprint = {
   name: string;
   status: string;
   goal: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
 };
 
 function SortableRow({
   issue,
   projectId,
   canEdit,
-  activeSprintId,
+  onOpen,
 }: {
   issue: Issue;
   projectId: string;
   canEdit: boolean;
-  activeSprintId?: string;
+  onOpen: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: issue.id });
-  const [, startTransition] = useTransition();
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -85,29 +92,77 @@ function SortableRow({
         ) : null}
         <div>
           <Link
-            href={`/projects/${projectId}/issues/${issue.id}`}
+            href={`/projects/${projectId}/issues/${issue.id}?from=/projects/${projectId}/backlog`}
             className="text-sm font-medium text-sky-600"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              onOpen(issue.id);
+            }}
           >
             {issue.key}
           </Link>
           <p className="text-sm">{issue.title}</p>
-          <p className="text-[11px] uppercase text-zinc-400">{issue.type}</p>
+          <p className="text-[11px] text-zinc-400">
+            {issue.type}
+            {issue.story_points != null ? ` · ${issue.story_points} SP` : ""}
+            {issue.assignee_name ? ` · ${issue.assignee_name}` : ""}
+            {issue.due_date ? ` · ${issue.due_date}` : ""}
+          </p>
         </div>
       </div>
-      {canEdit && activeSprintId ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() =>
-            startTransition(async () => {
-              await assignToSprintAction(issue.id, activeSprintId);
-              window.location.reload();
-            })
-          }
-        >
-          У спринт
-        </Button>
-      ) : null}
+    </div>
+  );
+}
+
+function DropList({
+  id,
+  title,
+  extra,
+  issues,
+  projectId,
+  canEdit,
+  onOpen,
+}: {
+  id: string;
+  title: string;
+  extra?: string;
+  issues: Issue[];
+  projectId: string;
+  canEdit: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`space-y-2 rounded-xl border p-3 ${
+        isOver ? "border-sky-400" : "border-zinc-200 dark:border-zinc-800"
+      }`}
+    >
+      <h2 className="font-semibold">
+        {title}{" "}
+        <span className="font-normal text-zinc-400">
+          ({issues.length}
+          {extra ? ` · ${extra}` : ""})
+        </span>
+      </h2>
+      <SortableContext items={issues.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+        <div className="min-h-[80px] space-y-2">
+          {issues.length === 0 ? (
+            <p className="text-sm text-zinc-500">Порожньо — перетягніть сюди.</p>
+          ) : null}
+          {issues.map((issue) => (
+            <SortableRow
+              key={issue.id}
+              issue={issue}
+              projectId={projectId}
+              canEdit={canEdit}
+              onOpen={onOpen}
+            />
+          ))}
+        </div>
+      </SortableContext>
     </div>
   );
 }
@@ -115,64 +170,118 @@ function SortableRow({
 export function BacklogClient({
   projectId,
   backlog,
+  sprintIssues = [],
   sprints,
   canManage,
   canEdit,
 }: {
   projectId: string;
   backlog: Issue[];
+  sprintIssues?: Issue[];
   sprints: Sprint[];
   canManage: boolean;
   canEdit: boolean;
 }) {
-  const [items, setItems] = useState(backlog);
+  const [backlogItems, setBacklogItems] = useState(backlog);
+  const [sprintItems, setSprintItems] = useState(sprintIssues);
   const [, startTransition] = useTransition();
+  const openIssue = useIssueDrawer();
+  const router = useRouter();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
   const active = sprints.find((s) => s.status === "active");
   const future = sprints.filter((s) => s.status === "future");
-  const ids = useMemo(() => items.map((i) => i.id), [items]);
+  const spSum = sprintItems.reduce((n, i) => n + (i.story_points || 0), 0);
+
+  function findList(id: string): "sprint" | "backlog" | null {
+    if (sprintItems.some((i) => i.id === id)) return "sprint";
+    if (backlogItems.some((i) => i.id === id)) return "backlog";
+    if (id === "sprint-box") return "sprint";
+    if (id === "backlog-box") return "backlog";
+    return null;
+  }
 
   function onDragEnd(event: DragEndEvent) {
     const { active: a, over } = event;
-    if (!over || a.id === over.id || !canEdit) return;
-    const oldIndex = items.findIndex((i) => i.id === a.id);
-    const newIndex = items.findIndex((i) => i.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
-    const next = arrayMove(items, oldIndex, newIndex);
-    setItems(next);
+    if (!over || !canEdit) return;
+    const from = findList(String(a.id));
+    const to = findList(String(over.id));
+    if (!from || !to) return;
+
+    if (from === to) {
+      const list = from === "sprint" ? sprintItems : backlogItems;
+      const oldIndex = list.findIndex((i) => i.id === a.id);
+      const newIndex = list.findIndex((i) => i.id === over.id);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+      const next = arrayMove(list, oldIndex, newIndex);
+      if (from === "sprint") setSprintItems(next);
+      else setBacklogItems(next);
+      startTransition(async () => {
+        await reorderBacklogAction(next.map((i) => i.id));
+      });
+      return;
+    }
+
+    const item =
+      from === "sprint"
+        ? sprintItems.find((i) => i.id === a.id)
+        : backlogItems.find((i) => i.id === a.id);
+    if (!item) return;
+    const nextSprint =
+      from === "sprint"
+        ? sprintItems.filter((i) => i.id !== item.id)
+        : [...sprintItems, { ...item, sprint_id: active?.id || item.sprint_id }];
+    const nextBacklog =
+      from === "backlog"
+        ? backlogItems.filter((i) => i.id !== item.id)
+        : [...backlogItems, { ...item, sprint_id: null }];
+    setSprintItems(nextSprint);
+    setBacklogItems(nextBacklog);
     startTransition(async () => {
-      await reorderBacklogAction(next.map((i) => i.id));
+      await assignToSprintAction(item.id, from === "backlog" ? active?.id || null : null);
     });
   }
 
+  const allIds = useMemo(
+    () => [...sprintItems.map((i) => i.id), ...backlogItems.map((i) => i.id)],
+    [sprintItems, backlogItems],
+  );
+
   return (
     <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-      <div className="space-y-2">
-        <h2 className="font-semibold">Backlog ({items.length})</h2>
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-            <div className="space-y-2">
-              {items.map((issue) => (
-                <SortableRow
-                  key={issue.id}
-                  issue={issue}
-                  projectId={projectId}
-                  canEdit={canEdit}
-                  activeSprintId={active?.id}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <div className="space-y-4">
+          {active ? (
+            <DropList
+              id="sprint-box"
+              title={`Спринт: ${active.name}`}
+              extra={`${spSum} SP`}
+              issues={sprintItems}
+              projectId={projectId}
+              canEdit={canEdit}
+              onOpen={openIssue}
+            />
+          ) : null}
+          <DropList
+            id="backlog-box"
+            title="Беклог"
+            issues={backlogItems}
+            projectId={projectId}
+            canEdit={canEdit}
+            onOpen={openIssue}
+          />
+        </div>
+      </DndContext>
 
       <div className="space-y-4">
         {active ? (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
             <h3 className="font-semibold">Активний: {active.name}</h3>
             {active.goal ? <p className="text-sm text-zinc-600">{active.goal}</p> : null}
+            <p className="mt-1 text-xs text-zinc-500">
+              {active.start_date || "?"} → {active.end_date || "?"} · {sprintItems.length} задач · {spSum} SP
+            </p>
             {canManage ? (
               <form className="mt-3 space-y-2" action={completeSprintAction}>
                 <input type="hidden" name="projectId" value={projectId} />
@@ -183,7 +292,7 @@ export function BacklogClient({
                   className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                   defaultValue="backlog"
                 >
-                  <option value="backlog">Backlog</option>
+                  <option value="backlog">Беклог</option>
                   {future.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
@@ -215,7 +324,7 @@ export function BacklogClient({
                   onClick={() =>
                     startTransition(async () => {
                       await startSprintAction(projectId, s.id);
-                      window.location.reload();
+                      router.refresh();
                     })
                   }
                 >
@@ -257,6 +366,7 @@ export function BacklogClient({
           </form>
         ) : null}
       </div>
+      <span className="sr-only">{allIds.join(",")}</span>
     </div>
   );
 }

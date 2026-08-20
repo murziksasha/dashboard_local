@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getAppBaseUrl } from "@/lib/app-url";
+import { logAudit } from "@/lib/audit";
 import { createSession, ldapPasswordPlaceholder } from "@/lib/auth";
 import { get, nowIso, run } from "@/lib/db";
 import { createId } from "@/lib/id";
 import { exchangeOidcCode } from "@/lib/oidc";
+import { clientIpFromHeaders, userAgentFromHeaders } from "@/lib/request-ip";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -44,6 +46,13 @@ export async function GET(req: Request) {
     }
 
     if (user && !user.active) {
+      logAudit({
+        action: "login.fail",
+        login,
+        ip: clientIpFromHeaders(req.headers),
+        userAgent: userAgentFromHeaders(req.headers),
+        detail: "oidc_disabled",
+      });
       return NextResponse.redirect(`${base}/login?error=disabled`);
     }
 
@@ -72,8 +81,22 @@ export async function GET(req: Request) {
     }
 
     await createSession(userId);
+    logAudit({
+      action: "login.ok",
+      userId,
+      login,
+      ip: clientIpFromHeaders(req.headers),
+      userAgent: userAgentFromHeaders(req.headers),
+      detail: "oidc",
+    });
     return NextResponse.redirect(`${base}/dashboard`);
   } catch {
+    logAudit({
+      action: "login.fail",
+      ip: clientIpFromHeaders(req.headers),
+      userAgent: userAgentFromHeaders(req.headers),
+      detail: "oidc_failed",
+    });
     return NextResponse.redirect(`${base}/login?error=oidc_failed`);
   }
 }

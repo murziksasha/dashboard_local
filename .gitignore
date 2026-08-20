@@ -39,3 +39,7 @@ next-env.d.ts
 !/data/uploads/.gitkeep
 /data/backups/**
 !/data/backups/.gitkeep
+
+# local secrets / smoke leftovers
+cookies.txt
+session.id

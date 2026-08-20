@@ -65,7 +65,7 @@ export function GanttView({
     origEnd: Date;
   } | null>(null);
   const [, startTransition] = useTransition();
-  const dayWidth = 28;
+  const [dayWidth, setDayWidth] = useState(28);
 
   const range = useMemo(() => {
     const dates: Date[] = [];
@@ -92,20 +92,24 @@ export function GanttView({
     [links],
   );
 
+  const undated = issues.filter((i) => !i.start_date && !i.due_date);
+  const dated = issues.filter((i) => i.start_date || i.due_date);
+  const todayOffset = daysBetween(range.start, new Date());
+
   const sorted = useMemo(() => {
     if (mode === "timeline") {
-      return [...issues].sort((a, b) =>
+      return [...dated].sort((a, b) =>
         (a.start_date || a.due_date || "").localeCompare(
           b.start_date || b.due_date || "",
         ),
       );
     }
-    return [...issues].sort((a, b) => {
+    return [...dated].sort((a, b) => {
       if (a.type === "epic" && b.type !== "epic") return -1;
       if (b.type === "epic" && a.type !== "epic") return 1;
       return a.key.localeCompare(b.key);
     });
-  }, [issues, mode]);
+  }, [dated, mode]);
 
   function commitDates(id: string, start: Date, end: Date) {
     if (end < start) end = start;
@@ -193,9 +197,30 @@ export function GanttView({
           )}
           onClick={() => setMode("dependencies")}
         >
-          Dependencies Gantt
+          Залежності
+        </button>
+        <button type="button" className="rounded-md bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800" onClick={() => setDayWidth(14)}>
+          Тиждень
+        </button>
+        <button type="button" className="rounded-md bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800" onClick={() => setDayWidth(28)}>
+          День
+        </button>
+        <button type="button" className="rounded-md bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800" onClick={() => setDayWidth(48)}>
+          Крупно
         </button>
       </div>
+      {undated.length ? (
+        <div className="rounded-xl border border-dashed border-zinc-300 p-3 text-sm dark:border-zinc-700">
+          <p className="mb-1 font-medium">Без дат</p>
+          <div className="flex flex-wrap gap-2">
+            {undated.map((i) => (
+              <Link key={i.id} href={`/projects/${projectId}/issues/${i.id}`} className="text-sky-600">
+                {i.key}
+              </Link>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
         <div className="min-w-full" style={{ minWidth: 280 + width }}>
@@ -215,6 +240,12 @@ export function GanttView({
                 );
               })}
               <div className="h-8" />
+              {todayOffset >= 0 && todayOffset < range.days ? (
+                <div
+                  className="pointer-events-none absolute top-0 z-10 h-full w-px bg-rose-500"
+                  style={{ left: todayOffset * dayWidth }}
+                />
+              ) : null}
             </div>
           </div>
 

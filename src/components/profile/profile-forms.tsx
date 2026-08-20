@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { updateTelegramChatAction } from "@/app/actions/integration-settings";
 import {
   changeOwnPasswordAction,
+  updateNotifyPrefsAction,
   updateProfileAction,
 } from "@/app/actions/profile";
 import { Button } from "@/components/ui/button";
@@ -14,10 +15,12 @@ export function ProfileForms({
   name,
   email,
   telegramChat,
+  notifyPrefs,
 }: {
   name: string;
   email: string | null;
   telegramChat?: string;
+  notifyPrefs?: Record<string, boolean>;
 }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -108,6 +111,43 @@ export function ProfileForms({
         />
         <Button type="submit" size="sm" variant="secondary" disabled={pending}>
           Зберегти Telegram
+        </Button>
+      </form>
+
+      <form
+        className="space-y-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const fd = new FormData(e.currentTarget);
+          setErr(null);
+          setMsg(null);
+          startTransition(async () => {
+            await updateNotifyPrefsAction(fd);
+            setMsg("Налаштування сповіщень збережено.");
+          });
+        }}
+      >
+        <h3 className="font-semibold">Сповіщення</h3>
+        {(
+          [
+            ["assigned", "Призначення"],
+            ["comment", "Коментарі"],
+            ["mention", "Згадки"],
+            ["status", "Зміна статусу"],
+            ["due_soon", "Дедлайн"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name={key}
+              defaultChecked={notifyPrefs?.[key] !== false}
+            />
+            {label}
+          </label>
+        ))}
+        <Button type="submit" size="sm" variant="secondary" disabled={pending}>
+          Зберегти сповіщення
         </Button>
       </form>
 

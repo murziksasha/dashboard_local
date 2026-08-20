@@ -127,7 +127,8 @@ export function runJql(
     if (dir === "desc" || dir === "asc") orderDir = dir;
   }
 
-  const allProjectIssues = listIssues(projectId);
+  const allProjectIssues = listIssues(projectId, { limit: 5000 });
+  const needsHistory = /\b(was|changed)\b/i.test(trimmed);
   const users = all<{ id: string; login: string; name: string }>(
     `SELECT id, login, name FROM users`,
   );
@@ -146,19 +147,21 @@ export function runJql(
      WHERE d.project_id = ?`,
     [projectId],
   );
-  const history = all<{
-    issue_id: string;
-    action: string;
-    payload_json: string | null;
-    created_at: string;
-  }>(
-    `SELECT issue_id, action, payload_json, created_at
+  const history = needsHistory
+    ? all<{
+        issue_id: string;
+        action: string;
+        payload_json: string | null;
+        created_at: string;
+      }>(
+        `SELECT issue_id, action, payload_json, created_at
      FROM activity_events
      WHERE project_id = ? AND issue_id IS NOT NULL
        AND action IN ('issue.updated', 'issue.moved')
      ORDER BY created_at ASC`,
-    [projectId],
-  );
+        [projectId],
+      )
+    : [];
 
   function statusNameById(id: string | null | undefined) {
     if (!id) return "";

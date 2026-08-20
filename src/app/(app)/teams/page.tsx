@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { requireUser } from "@/lib/auth";
 import { all } from "@/lib/db";
 
@@ -46,7 +47,21 @@ export default async function TeamsPage() {
           </Card>
         ))}
         {teams.length === 0 ? (
-          <p className="text-sm text-zinc-500">Команд ще немає.</p>
+          <EmptyState
+            className="md:col-span-2 xl:col-span-3"
+            title="Команд ще немає"
+            description="Адміністратор може створити команди й додати учасників."
+            action={
+              user.global_role === "admin" ? (
+                <Link
+                  href="/admin/teams"
+                  className="text-sm font-medium text-sky-600 hover:underline"
+                >
+                  Створити команду
+                </Link>
+              ) : null
+            }
+          />
         ) : null}
       </div>
     </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { bulkUpdateIssuesAction } from "@/app/actions/issues";
 import { deleteFilterAction } from "@/app/actions/filters";
@@ -22,6 +23,7 @@ export function ListBulkBar({
   const [statusId, setStatusId] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
   if (!selectedIds.length) return null;
 
   return (
@@ -59,7 +61,7 @@ export function ListBulkBar({
                 : undefined,
             });
             onClear();
-            window.location.reload();
+            router.refresh();
           })
         }
       >
@@ -81,6 +83,7 @@ export function DeleteFilterButton({
   projectId: string;
 }) {
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
   return (
     <button
       type="button"
@@ -89,7 +92,7 @@ export function DeleteFilterButton({
       onClick={() =>
         startTransition(async () => {
           await deleteFilterAction(filterId, projectId);
-          window.location.reload();
+          router.refresh();
         })
       }
     >

@@ -13,10 +13,13 @@ import {
   assertMinRole,
   canComment,
   canEditIssues,
+  canManageProject,
 } from "@/lib/permissions";
 import { parseAssigneeIds } from "@/lib/assignees";
+import { loadIssueWorkspace } from "@/lib/issue-workspace";
 import { getUploadsDir } from "@/lib/paths";
 import type { IssueType, LinkType, Priority } from "@/lib/types";
+import { parseDurationToSeconds } from "@/lib/utils";
 
 export async function createIssueAction(formData: FormData) {
   const user = await requireUser();
@@ -106,12 +109,16 @@ export async function updateIssueAction(formData: FormData) {
     storyPoints: formData.has("story_points")
       ? Number(formData.get("story_points") || 0) || null
       : undefined,
-    originalEstimateSec: formData.has("original_estimate_sec")
-      ? Number(formData.get("original_estimate_sec") || 0) || null
-      : undefined,
-    remainingEstimateSec: formData.has("remaining_estimate_sec")
-      ? Number(formData.get("remaining_estimate_sec") || 0) || null
-      : undefined,
+    originalEstimateSec: formData.has("original_estimate")
+      ? parseDurationToSeconds(String(formData.get("original_estimate") || ""))
+      : formData.has("original_estimate_sec")
+        ? Number(formData.get("original_estimate_sec") || 0) || null
+        : undefined,
+    remainingEstimateSec: formData.has("remaining_estimate")
+      ? parseDurationToSeconds(String(formData.get("remaining_estimate") || ""))
+      : formData.has("remaining_estimate_sec")
+        ? Number(formData.get("remaining_estimate_sec") || 0) || null
+        : undefined,
     dueDate: formData.has("due_date")
       ? String(formData.get("due_date") || "") || null
       : undefined,
@@ -176,9 +183,22 @@ export async function addCommentAction(formData: FormData) {
   if (!issue) return { error: "Не знайдено." };
   if (!canComment(user, issue.project_id)) throw new Error("FORBIDDEN");
   if (!body) return { error: "Порожній коментар." };
-  addComment({ issueId, author: user, body });
+  const created = addComment({ issueId, author: user, body });
   revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
-  return { ok: true };
+  return {
+    ok: true,
+    comment: {
+      ...created,
+      name: user.name,
+    },
+  };
+}
+
+export async function loadIssueWorkspaceAction(projectId: string, issueId: string) {
+  const user = await requireUser();
+  const data = loadIssueWorkspace(user, projectId, issueId);
+  if (!data) return { error: "Не знайдено." as const };
+  return { ok: true as const, data };
 }
 
 export async function toggleWatcherAction(issueId: string) {
@@ -205,7 +225,7 @@ export async function toggleWatcherAction(issueId: string) {
     ]);
   }
   revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
-  return { ok: true };
+  return { ok: true, watching: !existing };
 }
 
 export async function addIssueLinkAction(formData: FormData) {
@@ -219,8 +239,8 @@ export async function addIssueLinkAction(formData: FormData) {
   );
   if (!from) return { error: "Не знайдено." };
   if (!canEditIssues(user, from.project_id)) throw new Error("FORBIDDEN");
-  const to = get<{ id: string; project_id: string }>(
-    `SELECT id, project_id FROM issues WHERE key = ? COLLATE NOCASE`,
+  const to = get<{ id: string; project_id: string; key: string; title: string }>(
+    `SELECT id, project_id, key, title FROM issues WHERE key = ? COLLATE NOCASE`,
     [toKey],
   );
   if (!to || to.project_id !== from.project_id) {
@@ -240,10 +260,11 @@ export async function addIssueLinkAction(formData: FormData) {
     linkType = rawType;
   }
 
+  const linkId = createId("lnk");
   run(
     `INSERT OR IGNORE INTO issue_links (id, from_issue_id, to_issue_id, link_type, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-    [createId("lnk"), left, right, linkType, nowIso()],
+    [linkId, left, right, linkType, nowIso()],
   );
   logActivity({
     projectId: from.project_id,
@@ -253,13 +274,30 @@ export async function addIssueLinkAction(formData: FormData) {
     payload: { toKey, linkType: rawType },
   });
   revalidatePath(`/projects/${from.project_id}/issues/${from.id}`);
-  return { ok: true };
+  return {
+    ok: true,
+    link: {
+      id: linkId,
+      link_type:
+        rawType === "is_blocked_by"
+          ? "is blocked by"
+          : rawType === "relates"
+            ? "relates"
+            : rawType,
+      other_key: to.key,
+      other_id: to.id,
+      other_title: to.title,
+    },
+  };
 }
 
 export async function addWorklogAction(formData: FormData) {
   const user = await requireUser();
   const issueId = String(formData.get("issueId") || "");
-  const seconds = Number(formData.get("seconds") || 0);
+  let seconds = Number(formData.get("seconds") || 0);
+  if (formData.has("duration")) {
+    seconds = parseDurationToSeconds(String(formData.get("duration") || "")) || 0;
+  }
   const workDate = String(formData.get("work_date") || "").slice(0, 10);
   const note = String(formData.get("note") || "").trim() || null;
   const issue = get<{
@@ -272,10 +310,12 @@ export async function addWorklogAction(formData: FormData) {
   if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
   if (!seconds || seconds < 60) return { error: "Мінімум 1 хвилина." };
 
+  const worklogId = createId("wl");
+  const date = workDate || nowIso().slice(0, 10);
   run(
     `INSERT INTO worklogs (id, issue_id, user_id, seconds, work_date, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [createId("wl"), issueId, user.id, seconds, workDate || nowIso().slice(0, 10), note, nowIso()],
+    [worklogId, issueId, user.id, seconds, date, note, nowIso()],
   );
 
   if (issue.remaining_estimate_sec != null) {
@@ -292,7 +332,16 @@ export async function addWorklogAction(formData: FormData) {
     payload: { seconds },
   });
   revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
-  return { ok: true };
+  return {
+    ok: true,
+    worklog: {
+      id: worklogId,
+      seconds,
+      work_date: date,
+      note,
+      name: user.name,
+    },
+  };
 }
 
 export async function uploadAttachmentAction(formData: FormData) {
@@ -335,7 +384,16 @@ export async function uploadAttachmentAction(formData: FormData) {
     payload: { filename: file.name },
   });
   revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
-  return { ok: true };
+  return {
+    ok: true,
+    attachment: {
+      id,
+      filename: file.name,
+      size_bytes: file.size,
+      created_at: nowIso(),
+      mime_type: file.type || null,
+    },
+  };
 }
 
 export async function assignToSprintAction(
@@ -508,10 +566,11 @@ export async function deleteIssueAction(issueId: string) {
   );
   if (!issue) return { error: "Не знайдено." };
   if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
-  // clear references that may block delete
-  run(`UPDATE issues SET parent_id = NULL WHERE parent_id = ?`, [issueId]);
-  run(`UPDATE issues SET epic_id = NULL WHERE epic_id = ?`, [issueId]);
-  run(`DELETE FROM issues WHERE id = ?`, [issueId]);
+  run(`UPDATE issues SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+    nowIso(),
+    nowIso(),
+    issueId,
+  ]);
   logActivity({
     projectId: issue.project_id,
     actorId: user.id,
@@ -519,8 +578,72 @@ export async function deleteIssueAction(issueId: string) {
     payload: { key: issue.key, issueId },
   });
   bumpBoardVersion(issue.project_id);
+  try {
+    const { removeIssueFts } = await import("@/lib/search");
+    removeIssueFts(issueId);
+  } catch {
+    // ignore
+  }
+  try {
+    const { snapshotProjectSprints } = await import("@/lib/reports");
+    snapshotProjectSprints(issue.project_id);
+  } catch {
+    // ignore
+  }
   revalidatePath(`/projects/${issue.project_id}`);
+  revalidatePath(`/projects/${issue.project_id}/trash`);
   return { ok: true, projectId: issue.project_id };
+}
+
+export async function restoreIssueAction(issueId: string) {
+  const user = await requireUser();
+  const issue = get<{ id: string; project_id: string }>(
+    `SELECT id, project_id FROM issues WHERE id = ?`,
+    [issueId],
+  );
+  if (!issue) return { error: "Не знайдено." };
+  if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
+  run(`UPDATE issues SET deleted_at = NULL, updated_at = ? WHERE id = ?`, [
+    nowIso(),
+    issueId,
+  ]);
+  bumpBoardVersion(issue.project_id);
+  try {
+    const { upsertIssueFts } = await import("@/lib/search");
+    upsertIssueFts(issueId);
+  } catch {
+    // ignore
+  }
+  try {
+    const { snapshotProjectSprints } = await import("@/lib/reports");
+    snapshotProjectSprints(issue.project_id);
+  } catch {
+    // ignore
+  }
+  revalidatePath(`/projects/${issue.project_id}`);
+  revalidatePath(`/projects/${issue.project_id}/trash`);
+  return { ok: true };
+}
+
+export async function purgeIssueAction(issueId: string) {
+  const user = await requireUser();
+  const issue = get<{ id: string; project_id: string }>(
+    `SELECT id, project_id FROM issues WHERE id = ? AND deleted_at IS NOT NULL`,
+    [issueId],
+  );
+  if (!issue) return { error: "Не знайдено." };
+  if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
+  const { hardDeleteIssue } = await import("@/lib/purge");
+  hardDeleteIssue(issueId, issue.project_id);
+  try {
+    const { snapshotProjectSprints } = await import("@/lib/reports");
+    snapshotProjectSprints(issue.project_id);
+  } catch {
+    // ignore
+  }
+  revalidatePath(`/projects/${issue.project_id}`);
+  revalidatePath(`/projects/${issue.project_id}/trash`);
+  return { ok: true };
 }
 
 export async function bulkUpdateIssuesAction(input: {
@@ -578,5 +701,11 @@ export async function createSubtaskAction(formData: FormData) {
     actor: user,
   });
   revalidatePath(`/projects/${parent.project_id}/issues/${parentId}`);
-  return { ok: true, id: issue.id };
+  return {
+    ok: true,
+    id: issue.id,
+    key: issue.key,
+    title: issue.title,
+    status_name: issue.status_name || "To Do",
+  };
 }

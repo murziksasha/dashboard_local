@@ -28,7 +28,8 @@ export function runDueSoonNotifications(withinDays = 2): number {
      WHERE i.due_date IS NOT NULL
        AND i.due_date >= date('now')
        AND i.due_date <= ?
-       AND s.category != 'done'`,
+       AND s.category != 'done'
+       AND i.deleted_at IS NULL`,
     [until],
   );
 

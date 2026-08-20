@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import {
   DndContext,
@@ -43,6 +44,7 @@ function Row({
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: status.id });
   const [, startTransition] = useTransition();
+  const router = useRouter();
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -63,7 +65,7 @@ function Row({
           fd.set("statusId", status.id);
           startTransition(async () => {
             await updateStatusAction(fd);
-            window.location.reload();
+            router.refresh();
           });
         }}
       >
@@ -94,7 +96,7 @@ function Row({
             startTransition(async () => {
               try {
                 await deleteStatusAction(projectId, status.id);
-                window.location.reload();
+                router.refresh();
               } catch (e) {
                 alert(e instanceof Error ? e.message : "Помилка");
               }

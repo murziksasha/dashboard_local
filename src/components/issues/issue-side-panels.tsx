@@ -10,25 +10,28 @@ import {
 } from "@/app/actions/issues";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatDuration } from "@/lib/utils";
 
+export type CommentRow = {
+  id: string;
+  body: string;
+  created_at: string;
+  name: string;
+  author_id: string;
+};
+
 export function CommentsPanel({
-  projectId,
   comments,
   currentUserId,
   isAdmin,
+  onChange,
 }: {
-  projectId: string;
-  comments: Array<{
-    id: string;
-    body: string;
-    created_at: string;
-    name: string;
-    author_id: string;
-  }>;
+  comments: CommentRow[];
   currentUserId: string;
   isAdmin: boolean;
+  onChange: (next: CommentRow[]) => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [, startTransition] = useTransition();
@@ -50,10 +53,13 @@ export function CommentsPanel({
                   e.preventDefault();
                   const fd = new FormData(e.currentTarget);
                   fd.set("commentId", c.id);
+                  const body = String(fd.get("body") || "");
                   startTransition(async () => {
-                    await updateCommentAction(fd);
-                    setEditing(null);
-                    window.location.reload();
+                    const res = await updateCommentAction(fd);
+                    if (!res || !("error" in res && res.error)) {
+                      onChange(comments.map((x) => (x.id === c.id ? { ...x, body } : x)));
+                      setEditing(null);
+                    }
                   });
                 }}
               >
@@ -84,7 +90,7 @@ export function CommentsPanel({
                       onClick={() =>
                         startTransition(async () => {
                           await deleteCommentAction(c.id);
-                          window.location.reload();
+                          onChange(comments.filter((x) => x.id !== c.id));
                         })
                       }
                     >
@@ -97,50 +103,96 @@ export function CommentsPanel({
           </div>
         ))
       )}
-      <span className="sr-only">{projectId}</span>
     </div>
   );
+}
+
+function isImageAttachment(filename: string, mime?: string | null) {
+  if (mime?.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filename);
 }
 
 export function AttachmentsPanel({
   attachments,
   canManage,
+  onChange,
 }: {
   attachments: Array<{
     id: string;
     filename: string;
     size_bytes: number;
+    mime_type?: string | null;
   }>;
   canManage: boolean;
+  onChange: (
+    next: Array<{
+      id: string;
+      filename: string;
+      size_bytes: number;
+      mime_type?: string | null;
+    }>,
+  ) => void;
 }) {
   const [, startTransition] = useTransition();
+  const [preview, setPreview] = useState<string | null>(null);
+  const current = attachments.find((a) => a.id === preview);
   return (
     <div className="space-y-2">
-      {attachments.map((a) => (
-        <div key={a.id} className="flex items-center justify-between gap-2 text-sm">
-          <a href={`/api/attachments/${a.id}`} className="text-sky-600 hover:underline">
-            {a.filename} ({Math.round(a.size_bytes / 1024)} КБ)
-          </a>
-          {canManage ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                startTransition(async () => {
-                  await deleteAttachmentAction(a.id);
-                  window.location.reload();
-                })
-              }
-            >
-              Видалити
-            </Button>
-          ) : null}
-        </div>
-      ))}
+      {attachments.map((a) => {
+        const image = isImageAttachment(a.filename, a.mime_type);
+        return (
+          <div key={a.id} className="space-y-1">
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <a href={`/api/attachments/${a.id}`} className="text-sky-600 hover:underline">
+                {a.filename} ({Math.round(a.size_bytes / 1024)} КБ)
+              </a>
+              {canManage ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    startTransition(async () => {
+                      await deleteAttachmentAction(a.id);
+                      onChange(attachments.filter((x) => x.id !== a.id));
+                    })
+                  }
+                >
+                  Видалити
+                </Button>
+              ) : null}
+            </div>
+            {image ? (
+              <button type="button" className="block" onClick={() => setPreview(a.id)}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/attachments/${a.id}?inline=1`}
+                  alt={a.filename}
+                  className="max-h-36 rounded-md border border-zinc-200 object-contain dark:border-zinc-800"
+                />
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
       {attachments.length === 0 ? (
         <p className="text-sm text-zinc-500">Немає файлів.</p>
       ) : null}
+      <Dialog
+        open={!!current}
+        onClose={() => setPreview(null)}
+        title={current?.filename || "Перегляд"}
+        className="max-w-3xl"
+      >
+        {current ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/attachments/${current.id}?inline=1`}
+            alt={current.filename}
+            className="max-h-[70vh] w-full object-contain"
+          />
+        ) : null}
+      </Dialog>
     </div>
   );
 }
@@ -149,6 +201,7 @@ export function LinksPanel({
   projectId,
   links,
   canManage,
+  onChange,
 }: {
   projectId: string;
   links: Array<{
@@ -159,6 +212,15 @@ export function LinksPanel({
     other_title: string;
   }>;
   canManage: boolean;
+  onChange: (
+    next: Array<{
+      id: string;
+      link_type: string;
+      other_key: string;
+      other_id: string;
+      other_title: string;
+    }>,
+  ) => void;
 }) {
   const [, startTransition] = useTransition();
   return (
@@ -182,7 +244,7 @@ export function LinksPanel({
                 onClick={() =>
                   startTransition(async () => {
                     await deleteIssueLinkAction(l.id);
-                    window.location.reload();
+                    onChange(links.filter((x) => x.id !== l.id));
                   })
                 }
               >

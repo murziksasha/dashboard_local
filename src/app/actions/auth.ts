@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   createSession,
@@ -9,11 +10,26 @@ import {
   ldapPasswordPlaceholder,
   verifyPassword,
 } from "@/lib/auth";
+import {
+  LOGIN_FAIL_MAX,
+  assertLoginAllowed,
+  countRecentLoginFails,
+  logAudit,
+} from "@/lib/audit";
 import { get, nowIso, run, settingSet } from "@/lib/db";
 import { createId } from "@/lib/id";
 import { isLdapEnabled, ldapAuthenticate } from "@/lib/ldap";
+import { clientIpFromHeaders, userAgentFromHeaders } from "@/lib/request-ip";
 import { seedDemo } from "@/lib/seed";
 import type { SessionUser } from "@/lib/types";
+
+async function loginMeta() {
+  const h = await headers();
+  return {
+    ip: clientIpFromHeaders(h),
+    userAgent: userAgentFromHeaders(h),
+  };
+}
 
 export async function setupAction(formData: FormData) {
   if (isSetupComplete()) redirect("/login");
@@ -96,6 +112,10 @@ export async function loginAction(formData: FormData) {
   if (!isSetupComplete()) redirect("/setup");
   const login = String(formData.get("login") || "").trim();
   const password = String(formData.get("password") || "");
+  const { ip, userAgent } = await loginMeta();
+
+  const locked = assertLoginAllowed(login, ip);
+  if (locked) return { error: locked };
 
   const local = get<{
     id: string;
@@ -107,6 +127,7 @@ export async function loginAction(formData: FormData) {
   );
 
   if (local?.active && verifyPassword(password, local.password_hash)) {
+    logAudit({ action: "login.ok", userId: local.id, login, ip, userAgent, detail: "local" });
     await createSession(local.id);
     redirect("/dashboard");
   }
@@ -116,14 +137,20 @@ export async function loginAction(formData: FormData) {
     if (profile) {
       try {
         const userId = await ensureLdapUser(profile);
+        logAudit({ action: "login.ok", userId, login, ip, userAgent, detail: "ldap" });
         await createSession(userId);
         redirect("/dashboard");
       } catch {
+        logAudit({ action: "login.fail", login, ip, userAgent, detail: "disabled" });
         return { error: "Обліковий запис вимкнено." };
       }
     }
   }
 
+  logAudit({ action: "login.fail", login, ip, userAgent, detail: "invalid" });
+  if (countRecentLoginFails(login, ip) >= LOGIN_FAIL_MAX) {
+    logAudit({ action: "login.lock", login, ip, userAgent });
+  }
   return { error: "Невірний логін або пароль." };
 }
 

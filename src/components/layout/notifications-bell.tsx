@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Bell } from "lucide-react";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   listNotificationsAction,
   markAllNotificationsReadAction,
@@ -25,8 +25,10 @@ export function NotificationsBell() {
   const [items, setItems] = useState<Item[]>([]);
   const [unread, setUnread] = useState(0);
   const [, startTransition] = useTransition();
+  const root = useRef<HTMLDivElement>(null);
 
   async function refresh() {
+    if (typeof document !== "undefined" && document.hidden) return;
     const res = await listNotificationsAction();
     setItems(res.items);
     setUnread(res.unread);
@@ -34,17 +36,56 @@ export function NotificationsBell() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource("/api/events");
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data) as { type?: string };
+          if (data.type === "notification") refresh();
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // ignore
+    }
+    const t = setInterval(refresh, 30000);
+    function onVis() {
+      if (!document.hidden) refresh();
+    }
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      es?.close();
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={root}>
       <Button
         type="button"
         variant="ghost"
         size="icon"
         aria-label="Сповіщення"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         <Bell className="size-4" />

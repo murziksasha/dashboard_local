@@ -5,7 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth";
-import { listProjectsForUser } from "@/lib/projects";
+import {
+  listActiveSprintNames,
+  listProjectOpenCounts,
+  listProjectsForUser,
+} from "@/lib/projects";
+import { EmptyState } from "@/components/ui/empty-state";
 import { canManageProject } from "@/lib/permissions";
 
 export default async function ProjectsPage() {
@@ -13,6 +18,9 @@ export default async function ProjectsPage() {
   const projects = listProjectsForUser(user, { includeArchived: true });
   const active = projects.filter((p) => !p.archived);
   const archived = projects.filter((p) => p.archived);
+  const ids = projects.map((p) => p.id);
+  const openCounts = listProjectOpenCounts(ids);
+  const sprintNames = listActiveSprintNames(ids);
 
   return (
     <div className="space-y-6">
@@ -37,16 +45,30 @@ export default async function ProjectsPage() {
                   <Badge tone="sky">{p.key}</Badge>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <p className="line-clamp-3 text-sm text-zinc-500">
                   {p.description || "Без опису"}
                 </p>
+                <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
+                  <span>{openCounts[p.id] ?? 0} відкритих</span>
+                  {sprintNames[p.id] ? (
+                    <span className="text-emerald-600">Спринт: {sprintNames[p.id]}</span>
+                  ) : null}
+                </div>
               </CardContent>
             </Card>
           </Link>
         ))}
         {active.length === 0 ? (
-          <p className="text-sm text-zinc-500">Поки немає доступних проєктів.</p>
+          <EmptyState
+            className="md:col-span-2 xl:col-span-3"
+            title="Поки немає доступних проєктів"
+            description={
+              user.global_role === "admin"
+                ? "Створіть перший проєкт формою вище."
+                : "Зверніться до адміністратора, щоб отримати доступ."
+            }
+          />
         ) : null}
       </div>
 

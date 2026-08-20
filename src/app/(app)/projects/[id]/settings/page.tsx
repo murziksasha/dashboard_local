@@ -18,10 +18,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { requireUser } from "@/lib/auth";
+import { listActiveUsers, requireUser } from "@/lib/auth";
 import { all } from "@/lib/db";
 import { canManageProject } from "@/lib/permissions";
-import { loadProjectContext } from "@/lib/project-page";
+import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
 import { PROJECT_ROLE_LABELS } from "@/lib/types";
 import { listWorkflowRules } from "@/lib/workflow";
 
@@ -32,7 +32,9 @@ export default async function ProjectSettingsPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const ctx = loadProjectContext(user, id);
+  const ctx = loadProjectShell(user, id);
+  const { members } = loadProjectPeople(id);
+  const allUsers = listActiveUsers();
   if (!canManageProject(user, id) && user.global_role !== "admin") {
     redirect(`/projects/${id}`);
   }
@@ -80,7 +82,7 @@ export default async function ProjectSettingsPage({
             <CardTitle>Учасники</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {ctx.members.map((m) => (
+            {members.map((m) => (
               <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
                 <span>
                   {m.name}{" "}
@@ -107,7 +109,7 @@ export default async function ProjectSettingsPage({
               <input type="hidden" name="projectId" value={id} />
               <Label>Додати користувача</Label>
               <Select name="userId" required>
-                {ctx.users.map((u) => (
+                {allUsers.map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.name} (@{u.login})
                   </option>

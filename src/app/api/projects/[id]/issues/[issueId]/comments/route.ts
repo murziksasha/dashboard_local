@@ -53,6 +53,6 @@ export async function POST(
   if (!text) {
     return NextResponse.json({ error: "body_required" }, { status: 400 });
   }
-  const commentId = addComment({ issueId, author: user, body: text });
-  return NextResponse.json({ id: commentId }, { status: 201 });
+  const created = addComment({ issueId, author: user, body: text });
+  return NextResponse.json({ id: created.id }, { status: 201 });
 }

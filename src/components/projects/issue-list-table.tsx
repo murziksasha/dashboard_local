@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState, type ReactNode } from "react";
+import { useIssueDrawer } from "@/components/issues/issue-drawer";
 import { ListBulkBar, DeleteFilterButton } from "@/components/projects/list-bulk-bar";
 import { SaveFilterForm } from "@/components/projects/save-filter-form";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +30,8 @@ export function IssueListTable({
   savedFilters,
   queryJson,
   currentUserId,
+  sort = "rank",
+  dir = "asc",
 }: {
   projectId: string;
   issues: Issue[];
@@ -37,8 +41,32 @@ export function IssueListTable({
   savedFilters: Array<{ id: string; name: string; query_json: string; owner_id: string }>;
   queryJson: string;
   currentUserId: string;
+  sort?: string;
+  dir?: string;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
+  const openIssue = useIssueDrawer();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  function sortBy(col: string) {
+    const sp = new URLSearchParams(searchParams.toString());
+    const nextDir = sort === col && dir === "asc" ? "desc" : "asc";
+    sp.set("sort", col);
+    sp.set("dir", nextDir);
+    router.replace(`/projects/${projectId}/list?${sp.toString()}`);
+  }
+
+  function Th({ col, children }: { col: string; children: ReactNode }) {
+    return (
+      <th className="px-3 py-2">
+        <button type="button" className="font-medium hover:underline" onClick={() => sortBy(col)}>
+          {children}
+          {sort === col ? (dir === "desc" ? " ↓" : " ↑") : ""}
+        </button>
+      </th>
+    );
+  }
 
   function toggle(id: string) {
     setSelected((prev) =>
@@ -104,16 +132,26 @@ export function IssueListTable({
                   />
                 </th>
               ) : null}
-              <th className="px-3 py-2">Ключ</th>
+              <Th col="key">Ключ</Th>
               <th className="px-3 py-2">Назва</th>
               <th className="px-3 py-2">Тип</th>
               <th className="px-3 py-2">Статус</th>
-              <th className="px-3 py-2">Пріоритет</th>
+              <Th col="priority">Пріоритет</Th>
               <th className="px-3 py-2">Виконавець</th>
-              <th className="px-3 py-2">Дедлайн</th>
+              <Th col="due">Дедлайн</Th>
             </tr>
           </thead>
           <tbody>
+            {issues.length === 0 ? (
+              <tr>
+                <td
+                  className="px-3 py-8 text-center text-sm text-zinc-500"
+                  colSpan={canEdit ? 8 : 7}
+                >
+                  Немає задач за цим фільтром. Змініть умови або створіть задачу.
+                </td>
+              </tr>
+            ) : null}
             {issues.map((issue) => (
               <tr key={issue.id} className="border-t border-zinc-200 dark:border-zinc-800">
                 {canEdit ? (
@@ -128,12 +166,25 @@ export function IssueListTable({
                 <td className="px-3 py-2">
                   <Link
                     className="font-medium text-sky-600"
-                    href={`/projects/${projectId}/issues/${issue.id}`}
+                    href={`/projects/${projectId}/issues/${issue.id}?from=/projects/${projectId}/list`}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      e.preventDefault();
+                      openIssue(issue.id);
+                    }}
                   >
                     {issue.key}
                   </Link>
                 </td>
-                <td className="px-3 py-2">{issue.title}</td>
+                <td className="px-3 py-2">
+                  <button
+                    type="button"
+                    className="text-left hover:underline"
+                    onClick={() => openIssue(issue.id)}
+                  >
+                    {issue.title}
+                  </button>
+                </td>
                 <td className="px-3 py-2">{ISSUE_TYPE_LABELS[issue.type]}</td>
                 <td className="px-3 py-2">{issue.status_name}</td>
                 <td className="px-3 py-2">

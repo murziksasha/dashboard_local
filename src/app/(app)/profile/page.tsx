@@ -11,6 +11,15 @@ export default async function ProfilePage() {
     login: string;
   }>(`SELECT name, email, login FROM users WHERE id = ?`, [user.id])!;
   const telegramChat = settingGet(`telegram_chat_${user.id}`) || "";
+  let notifyPrefs: Record<string, boolean> = {};
+  try {
+    notifyPrefs = JSON.parse(settingGet(`notify_prefs_${user.id}`) || "{}") as Record<
+      string,
+      boolean
+    >;
+  } catch {
+    notifyPrefs = {};
+  }
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
@@ -27,6 +36,7 @@ export default async function ProfilePage() {
             name={row.name}
             email={row.email}
             telegramChat={telegramChat}
+            notifyPrefs={notifyPrefs}
           />
         </CardContent>
       </Card>

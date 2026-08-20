@@ -75,6 +75,7 @@ export interface Issue {
 export interface IssueFilter {
   q?: string;
   types?: IssueType[];
+  excludeTypes?: IssueType[];
   statusIds?: string[];
   assigneeIds?: Array<string | "unassigned">;
   priorities?: Priority[];
@@ -82,6 +83,10 @@ export interface IssueFilter {
   sprintId?: string | "backlog" | "any";
   epicId?: string;
   due?: "overdue" | "week" | "none";
+  sort?: "rank" | "key" | "updated" | "created" | "due" | "priority";
+  dir?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 }
 
 export const PRIORITY_LABELS: Record<Priority, string> = {

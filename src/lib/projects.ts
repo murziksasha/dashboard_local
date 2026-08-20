@@ -1,5 +1,6 @@
 import { logActivity } from "./activity";
 import { all, get, nowIso, run } from "./db";
+import { emitAppEvent } from "./events";
 import { createId } from "./id";
 import type { Project, SessionUser, Status } from "./types";
 import { DEFAULT_STATUSES } from "./types";
@@ -43,6 +44,7 @@ export function bumpBoardVersion(projectId: string) {
     `UPDATE projects SET board_version = board_version + 1, updated_at = ? WHERE id = ?`,
     [nowIso(), projectId],
   );
+  emitAppEvent({ type: "board", projectId });
 }
 
 export function createProject(params: {
@@ -94,6 +96,83 @@ export function createProject(params: {
   });
 
   return getProjectById(id)!;
+}
+
+export function listProjectSprints(projectId: string) {
+  return all<{
+    id: string;
+    name: string;
+    status: string;
+    goal: string | null;
+    start_date: string | null;
+    end_date: string | null;
+  }>(
+    `SELECT id, name, status, goal, start_date, end_date
+     FROM sprints WHERE project_id = ? ORDER BY created_at DESC`,
+    [projectId],
+  );
+}
+
+export function listProjectMembers(projectId: string) {
+  return all<{ id: string; name: string; login: string; role: string }>(
+    `SELECT u.id, u.name, u.login, pm.role
+     FROM project_members pm
+     JOIN users u ON u.id = pm.user_id
+     WHERE pm.project_id = ?
+     ORDER BY u.name`,
+    [projectId],
+  );
+}
+
+/** Active users who can be assigned: direct members or via project teams. */
+export function listProjectAssignableUsers(projectId: string): SessionUser[] {
+  return all<SessionUser>(
+    `SELECT DISTINCT u.id, u.login, u.name, u.email, u.global_role
+     FROM users u
+     WHERE u.active = 1 AND (
+       EXISTS (
+         SELECT 1 FROM project_members pm
+         WHERE pm.project_id = ? AND pm.user_id = u.id
+       )
+       OR EXISTS (
+         SELECT 1 FROM project_teams pt
+         JOIN team_members tm ON tm.team_id = pt.team_id
+         WHERE pt.project_id = ? AND tm.user_id = u.id
+       )
+     )
+     ORDER BY u.name`,
+    [projectId, projectId],
+  );
+}
+
+export function listProjectOpenCounts(projectIds: string[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  if (!projectIds.length) return map;
+  const rows = all<{ project_id: string; c: number }>(
+    `SELECT i.project_id, COUNT(*) as c
+     FROM issues i
+     JOIN statuses s ON s.id = i.status_id
+     WHERE i.project_id IN (${projectIds.map(() => "?").join(",")})
+       AND s.category != 'done'
+       AND i.deleted_at IS NULL
+     GROUP BY i.project_id`,
+    projectIds,
+  );
+  for (const row of rows) map[row.project_id] = Number(row.c);
+  return map;
+}
+
+export function listActiveSprintNames(projectIds: string[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  if (!projectIds.length) return map;
+  const rows = all<{ project_id: string; name: string }>(
+    `SELECT project_id, name FROM sprints
+     WHERE status = 'active'
+       AND project_id IN (${projectIds.map(() => "?").join(",")})`,
+    projectIds,
+  );
+  for (const row of rows) map[row.project_id] = row.name;
+  return map;
 }
 
 export function listStatuses(projectId: string): Status[] {
