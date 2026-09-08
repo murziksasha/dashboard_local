@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getUserFromApiToken } from "@/lib/api-auth";
 import { getSessionUser } from "@/lib/auth";
 import { get } from "@/lib/db";
+import { contentTypeForDownload, isSafeInlineImage } from "@/lib/mime-safe";
 import { getUploadsDir } from "@/lib/paths";
 import { canAccessProject } from "@/lib/permissions";
 
@@ -39,11 +40,14 @@ export async function GET(
   const buffer = fs.readFileSync(filePath);
   const inline = new URL(req.url).searchParams.get("inline") === "1";
   const mime = row.mime_type || "application/octet-stream";
-  const asInline = inline && mime.startsWith("image/");
+  const asInline = inline && isSafeInlineImage(mime, row.filename);
   return new NextResponse(buffer, {
     headers: {
-      "Content-Type": mime,
+      "Content-Type": contentTypeForDownload(mime, asInline),
       "Content-Disposition": `${asInline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none'",
+      "X-Download-Options": "noopen",
     },
   });
 }

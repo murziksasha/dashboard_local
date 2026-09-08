@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { hashPassword, requireAdmin } from "@/lib/auth";
 import { get, nowIso, run } from "@/lib/db";
 import { createId } from "@/lib/id";
+import { passwordPolicyError } from "@/lib/password-policy";
 
 export async function createUserAction(formData: FormData) {
   await requireAdmin();
@@ -13,9 +14,11 @@ export async function createUserAction(formData: FormData) {
   const password = String(formData.get("password") || "");
   const globalRole = String(formData.get("global_role") || "user");
 
-  if (!login || !name || password.length < 6) {
-    return { error: "Логін, імʼя та пароль (мін. 6) обовʼязкові." };
+  if (!login || !name) {
+    return { error: "Логін та імʼя обовʼязкові." };
   }
+  const policy = passwordPolicyError(password, login);
+  if (policy) return { error: policy };
   if (get(`SELECT id FROM users WHERE login = ? COLLATE NOCASE`, [login])) {
     return { error: "Логін уже зайнятий." };
   }
@@ -58,7 +61,8 @@ export async function resetPasswordAction(formData: FormData) {
   await requireAdmin();
   const userId = String(formData.get("userId") || "");
   const password = String(formData.get("password") || "");
-  if (password.length < 6) return { error: "Пароль мінімум 6 символів." };
+  const policy = passwordPolicyError(password);
+  if (policy) return { error: policy };
   run(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, [
     hashPassword(password),
     nowIso(),

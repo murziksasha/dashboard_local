@@ -8,6 +8,8 @@ import {
   deleteIssueLinkAction,
   updateCommentAction,
 } from "@/app/actions/issues";
+import { toggleReactionAction } from "@/app/actions/reactions";
+import { REACTION_EMOJI } from "@/lib/reaction-emoji";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -78,6 +80,22 @@ export function CommentsPanel({
                 <div className="mt-1">
                   <Markdown content={c.body} />
                 </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {REACTION_EMOJI.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      className="rounded px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      onClick={() =>
+                        startTransition(async () => {
+                          await toggleReactionAction(c.id, emoji);
+                        })
+                      }
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
                 {c.author_id === currentUserId || isAdmin ? (
                   <div className="mt-2 flex gap-2">
                     <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(c.id)}>
@@ -108,8 +126,11 @@ export function CommentsPanel({
 }
 
 function isImageAttachment(filename: string, mime?: string | null) {
-  if (mime?.startsWith("image/")) return true;
-  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(filename);
+  if (mime === "image/svg+xml" || /\.svg$/i.test(filename)) return false;
+  if (mime && ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"].includes(mime)) {
+    return true;
+  }
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(filename);
 }
 
 export function AttachmentsPanel({

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,14 @@ export function BoardFilters({
   const assignee = sp.get("assignee") || "";
   const due = sp.get("due") || "";
   const type = sp.get("type") || "";
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`dl_board_filters_${projectId}`, sp.toString());
+    } catch {
+      // ignore
+    }
+  }, [projectId, sp]);
 
   function href(patch: Record<string, string | null>) {
     const next = new URLSearchParams(sp.toString());

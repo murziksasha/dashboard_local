@@ -1,16 +1,29 @@
 import { createHash, randomBytes } from "crypto";
-import { get, nowIso, run } from "./db";
+import { all, get, nowIso, run } from "./db";
 import { createId } from "./id";
 import type { SessionUser } from "./types";
 import { verifyPassword } from "./auth";
 
 const API_TOKEN_PREFIX = "dl_";
+export const MAX_API_TOKENS = 5;
 
 export function hashApiToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function pruneApiTokens(userId: string) {
+  run(`DELETE FROM api_tokens WHERE user_id = ? AND expires_at < ?`, [userId, nowIso()]);
+  const rows = all<{ id: string }>(
+    `SELECT id FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC`,
+    [userId],
+  );
+  for (const extra of rows.slice(MAX_API_TOKENS - 1)) {
+    run(`DELETE FROM api_tokens WHERE id = ?`, [extra.id]);
+  }
+}
+
 export function issueApiToken(userId: string): string {
+  pruneApiTokens(userId);
   const raw = API_TOKEN_PREFIX + randomBytes(24).toString("hex");
   const id = createId("tok");
   const expires = new Date();
@@ -21,6 +34,13 @@ export function issueApiToken(userId: string): string {
     [id, userId, hashApiToken(raw), expires.toISOString(), nowIso()],
   );
   return raw;
+}
+
+export function countActiveApiTokens(userId: string): number {
+  return all<{ id: string }>(
+    `SELECT id FROM api_tokens WHERE user_id = ? AND expires_at > ?`,
+    [userId, nowIso()],
+  ).length;
 }
 
 export function getUserFromApiToken(token: string | null): SessionUser | null {

@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import type { BurndownPoint } from "@/lib/reports";
 
 export function BurndownChart({
@@ -7,6 +10,7 @@ export function BurndownChart({
   points: BurndownPoint[];
   committed: number;
 }) {
+  const [hover, setHover] = useState<number | null>(null);
   const w = 640;
   const h = 220;
   const pad = 28;
@@ -29,8 +33,22 @@ export function BurndownChart({
         ) : null}
         <polyline fill="none" stroke="#0284c7" strokeWidth="2.5" points={remaining} />
         {points.map((p, i) => (
-          <circle key={p.day} cx={xs[i]} cy={y(p.remaining_points)} r="3" fill="#0284c7" />
+          <circle
+            key={p.day}
+            cx={xs[i]}
+            cy={y(p.remaining_points)}
+            r={hover === i ? 5 : 3}
+            fill="#0284c7"
+            className="cursor-pointer"
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+          />
         ))}
+        {hover != null && points[hover] ? (
+          <text x={xs[hover]} y={y(points[hover].remaining_points) - 8} textAnchor="middle" fontSize="11" className="fill-zinc-700 dark:fill-zinc-200">
+            {points[hover].day}: {points[hover].remaining_points} SP
+          </text>
+        ) : null}
         <text x={pad} y={16} className="fill-zinc-500" fontSize="11">
           {Math.round(maxY)} SP
         </text>

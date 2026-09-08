@@ -19,6 +19,7 @@ export function ProjectNav({ projectId }: { projectId: string }) {
     { href: `${base}/jql`, label: "JQL" },
     { href: `${base}/calendar`, label: "Календар" },
     { href: `${base}/reports`, label: "Звіти" },
+    { href: `${base}/time`, label: "Час" },
     { href: `${base}/dashboard`, label: "Дашборд" },
     { href: `${base}/trash`, label: "Кошик" },
     { href: `${base}/settings`, label: "Налаштування" },

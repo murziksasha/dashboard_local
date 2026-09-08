@@ -116,7 +116,20 @@ export function NotificationsBell() {
             {items.length === 0 ? (
               <p className="p-4 text-sm text-zinc-500">Поки немає сповіщень.</p>
             ) : (
-              items.map((item) => (
+              Object.values(
+                items.reduce(
+                  (acc, item) => {
+                    const key = item.link || item.id;
+                    const g = acc[key] || { ...item, count: 0, ids: [] as string[] };
+                    g.count += 1;
+                    g.ids.push(item.id);
+                    if (!item.read_at) g.read_at = null;
+                    acc[key] = g;
+                    return acc;
+                  },
+                  {} as Record<string, Item & { count: number; ids: string[] }>,
+                ),
+              ).map((item) => (
                 <Link
                   key={item.id}
                   href={item.link || "#"}
@@ -131,7 +144,10 @@ export function NotificationsBell() {
                     });
                   }}
                 >
-                  <p className="font-medium">{item.title}</p>
+                  <p className="font-medium">
+                    {item.count > 1 ? `${item.count} оновлення: ` : ""}
+                    {item.title}
+                  </p>
                   {item.body ? (
                     <p className="line-clamp-2 text-xs text-zinc-500">{item.body}</p>
                   ) : null}

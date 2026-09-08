@@ -1,17 +1,20 @@
 import nodemailer from "nodemailer";
 import { get, settingGet } from "./db";
+import { loadEnv } from "./env";
 import { listPushTokens, sendExpoPush } from "./push";
+import { settingGetSecret } from "./secrets";
 
 export function getNotifyChannelConfig() {
+  const env = loadEnv();
   return {
     emailEnabled: settingGet("notify_email_enabled") === "1",
     smtpHost: settingGet("smtp_host") || "",
     smtpPort: Number(settingGet("smtp_port") || "587"),
     smtpUser: settingGet("smtp_user") || "",
-    smtpPass: settingGet("smtp_pass") || "",
+    smtpPass: env.SMTP_PASS || settingGetSecret("smtp_pass") || "",
     smtpFrom: settingGet("smtp_from") || "dashboard@local",
     telegramEnabled: settingGet("notify_telegram_enabled") === "1",
-    telegramBotToken: settingGet("telegram_bot_token") || "",
+    telegramBotToken: env.TELEGRAM_BOT_TOKEN || settingGetSecret("telegram_bot_token") || "",
     // optional global chat; per-user chat id in settings key telegram_chat_<userId>
     telegramDefaultChat: settingGet("telegram_default_chat") || "",
     appBaseUrl: settingGet("app_base_url") || "http://localhost:3000",

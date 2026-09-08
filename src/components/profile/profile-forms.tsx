@@ -79,11 +79,11 @@ export function ProfileForms({
         </div>
         <div className="space-y-1">
           <Label>Новий пароль</Label>
-          <Input name="new_password" type="password" minLength={6} required />
+          <Input name="new_password" type="password" minLength={8} required />
         </div>
         <div className="space-y-1">
           <Label>Підтвердження</Label>
-          <Input name="confirm_password" type="password" minLength={6} required />
+          <Input name="confirm_password" type="password" minLength={8} required />
         </div>
         <Button type="submit" variant="secondary" disabled={pending}>
           Змінити пароль

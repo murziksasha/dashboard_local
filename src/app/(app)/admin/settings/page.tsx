@@ -16,6 +16,10 @@ import { getNotifyChannelConfig } from "@/lib/notify-channels";
 import { getOidcConfig } from "@/lib/oidc";
 import { settingGet } from "@/lib/db";
 import { formatDate } from "@/lib/utils";
+import { getHealth } from "@/lib/health";
+import { listWebhooks } from "@/lib/webhooks";
+import { createWebhookAction, deleteWebhookAction } from "@/app/actions/webhooks";
+import { secretIsSet } from "@/lib/secrets";
 
 export default async function AdminSettingsPage() {
   const user = await requireUser();
@@ -26,6 +30,10 @@ export default async function AdminSettingsPage() {
   const ldap = getLdapConfig();
   const oidc = getOidcConfig();
   const notify = getNotifyChannelConfig();
+  const health = getHealth();
+  const webhooks = listWebhooks();
+  const smtpSet = secretIsSet("smtp_pass");
+  const tgSet = secretIsSet("telegram_bot_token");
 
   return (
     <div className="space-y-6">
@@ -153,7 +161,7 @@ export default async function AdminSettingsPage() {
               <Input name="smtp_host" placeholder="smtp.example.com" defaultValue={notify.smtpHost} />
               <Input name="smtp_port" placeholder="587" defaultValue={String(notify.smtpPort)} />
               <Input name="smtp_user" placeholder="user" defaultValue={notify.smtpUser} />
-              <Input name="smtp_pass" type="password" placeholder="pass" defaultValue={notify.smtpPass} />
+              <Input name="smtp_pass" type="password" placeholder={smtpSet ? "••••••••" : "pass"} />
             </div>
             <Input name="smtp_from" placeholder="dashboard@example.com" defaultValue={notify.smtpFrom} />
 
@@ -161,7 +169,7 @@ export default async function AdminSettingsPage() {
               <input type="checkbox" name="notify_telegram_enabled" defaultChecked={notify.telegramEnabled} className="size-4" />
               Telegram bot
             </label>
-            <Input name="telegram_bot_token" placeholder="123:ABC..." defaultValue={notify.telegramBotToken} />
+            <Input name="telegram_bot_token" placeholder={tgSet ? "••••••••" : "123:ABC..."} />
             <Input name="telegram_default_chat" placeholder="Chat ID (опційно)" defaultValue={notify.telegramDefaultChat} />
             <Button type="submit">Зберегти канали</Button>
           </form>
@@ -180,6 +188,57 @@ export default async function AdminSettingsPage() {
             Персональний Telegram chat id користувач може вказати в Профілі. Для тесту
             потрібен email у профілі адміна та/або telegram chat.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Стан системи</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm">
+          <p>DB: {health.db}</p>
+          <p>Uptime: {health.uptimeSec}s</p>
+          <p>Дані: {Math.round(health.disk.dataBytes / 1024)} КБ</p>
+          <a href="/api/health" className="text-sky-600 hover:underline">
+            GET /api/health
+          </a>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Глобальні вебхуки</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {webhooks.map((w) => (
+            <div key={w.id} className="flex items-center justify-between gap-2 text-sm">
+              <span className="truncate">{w.url}</span>
+              <form
+                action={async () => {
+                  "use server";
+                  await deleteWebhookAction(w.id);
+                }}
+              >
+                <Button type="submit" size="sm" variant="ghost">
+                  Видалити
+                </Button>
+              </form>
+            </div>
+          ))}
+          <form
+            action={async (fd) => {
+              "use server";
+              await createWebhookAction(fd);
+            }}
+            className="grid max-w-lg gap-2"
+          >
+            <Input name="url" placeholder="https://example.com/hook" required />
+            <Input name="secret" placeholder="HMAC secret" />
+            <Input name="events" defaultValue="*" />
+            <Button type="submit" className="w-fit">
+              Додати
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </div>

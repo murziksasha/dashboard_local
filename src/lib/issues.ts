@@ -1,6 +1,7 @@
 import { logActivity } from "./activity";
+import { logAudit } from "./audit";
 import { getAssigneesMap, setIssueAssignees } from "./assignees";
-import { all, count, get, getDb, nowIso, run } from "./db";
+import { all, count, get, nowIso, run } from "./db";
 import { createId, packedRanks, rankBetween } from "./id";
 import { extractMentions, notifyMany } from "./notifications";
 import { bumpBoardVersion, getProjectById, listStatuses } from "./projects";
@@ -13,7 +14,8 @@ import type {
 } from "./types";
 import { getProjectRole } from "./permissions";
 import { emitAppEvent } from "./events";
-import { removeIssueFts, upsertIssueFts } from "./search";
+import { upsertIssueFts } from "./search";
+import { withTransaction } from "./tx";
 import { assertTransitionAllowed } from "./workflow";
 import { snapshotProjectSprints } from "./reports";
 
@@ -60,7 +62,7 @@ function chunkIds(ids: string[], size = 400): string[][] {
   return out;
 }
 
-function labelsMap(issueIds: string[]): Record<string, string[]> {
+export function labelsMap(issueIds: string[]): Record<string, string[]> {
   const map: Record<string, string[]> = {};
   if (!issueIds.length) return map;
   for (const part of chunkIds(issueIds)) {
@@ -77,7 +79,7 @@ function labelsMap(issueIds: string[]): Record<string, string[]> {
   return map;
 }
 
-function attachIssueExtras<T extends { id: string; assignee_name?: string | null }>(
+export function attachIssueExtras<T extends { id: string; assignee_name?: string | null }>(
   rows: T[],
 ): Array<T & { labels: string; assignee_names: string | null; assignee_name: string | null }> {
   if (!rows.length) {
@@ -166,7 +168,9 @@ export function listBoardIssues(
             i.assignee_id, i.reporter_id, i.parent_id, i.epic_id, i.sprint_id,
             i.story_points, i.due_date, i.start_date, i.rank, i.created_at, i.updated_at,
             s.name as status_name, s.category as status_category,
-            au.name as assignee_name
+            au.name as assignee_name,
+            (SELECT GROUP_CONCAT(il.label, ', ') FROM issue_labels il WHERE il.issue_id = i.id) as labels,
+            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id
@@ -174,27 +178,24 @@ export function listBoardIssues(
      ORDER BY i.rank ASC, i.created_at ASC`,
     params,
   );
-  return attachIssueExtras(rows);
+  return rows.map((row) => ({
+    ...row,
+    labels: row.labels || "",
+    assignee_names: row.assignee_names || null,
+    assignee_name: row.assignee_names?.split(",")[0]?.trim() || row.assignee_name || null,
+  }));
 }
 
 function nextIssueKey(projectId: string): string {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
-    const project = getProjectById(projectId);
-    if (!project) throw new Error("PROJECT_NOT_FOUND");
-    const seq = project.issue_seq + 1;
-    run(`UPDATE projects SET issue_seq = ?, updated_at = ? WHERE id = ?`, [
-      seq,
-      nowIso(),
-      projectId,
-    ]);
-    db.exec("COMMIT");
-    return `${project.key}-${seq}`;
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+  const project = getProjectById(projectId);
+  if (!project) throw new Error("PROJECT_NOT_FOUND");
+  const seq = project.issue_seq + 1;
+  run(`UPDATE projects SET issue_seq = ?, updated_at = ? WHERE id = ?`, [
+    seq,
+    nowIso(),
+    projectId,
+  ]);
+  return `${project.key}-${seq}`;
 }
 
 function lastRank(projectId: string, statusId: string | null): string | null {
@@ -232,6 +233,7 @@ export function createIssue(params: {
   labels?: string[];
   actor: SessionUser;
 }): IssueRow {
+  return withTransaction(() => {
   const statuses = listStatuses(params.projectId);
   const statusId =
     params.statusId ??
@@ -310,11 +312,18 @@ export function createIssue(params: {
     action: "issue.created",
     payload: { key, title: params.title, type: params.type },
   });
+  logAudit({
+    action: "issue.create",
+    userId: params.actor.id,
+    login: params.actor.login,
+    detail: key,
+  });
   bumpBoardVersion(params.projectId);
   upsertIssueFts(id);
   emitAppEvent({ type: "board", projectId: params.projectId, issueId: id });
   snapshotProjectSprints(params.projectId);
   return getIssue(id)!;
+  });
 }
 
 export function getIssue(id: string): IssueRow | undefined {
@@ -427,7 +436,9 @@ export function listIssues(
     order = `${order} ${filter.dir === "desc" ? "DESC" : "ASC"}`;
   }
   let sql = `SELECT i.*, s.name as status_name, s.category as status_category,
-            au.name as assignee_name, ru.name as reporter_name
+            au.name as assignee_name, ru.name as reporter_name,
+            (SELECT GROUP_CONCAT(il.label, ', ') FROM issue_labels il WHERE il.issue_id = i.id) as labels,
+            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id
@@ -443,7 +454,13 @@ export function listIssues(
       qparams.push(filter.offset);
     }
   }
-  return attachIssueExtras(all<IssueRow>(sql, qparams));
+  const rows = all<IssueRow>(sql, qparams);
+  return rows.map((row) => ({
+    ...row,
+    labels: row.labels || "",
+    assignee_names: row.assignee_names || null,
+    assignee_name: row.assignee_names?.split(",")[0]?.trim() || row.assignee_name || null,
+  }));
 }
 
 export function countIssues(projectId: string, filter: IssueFilter = {}): number {
@@ -476,6 +493,7 @@ export function updateIssue(
     labels: string[];
   }>,
 ) {
+  return withTransaction(() => {
   const issue = getIssue(issueId);
   if (!issue) throw new Error("NOT_FOUND");
 
@@ -583,11 +601,48 @@ export function updateIssue(
     action: "issue.updated",
     payload: { changes, before },
   });
+  logAudit({
+    action: "issue.update",
+    userId: actor.id,
+    login: actor.login,
+    detail: issue.key,
+  });
   bumpBoardVersion(issue.project_id);
   upsertIssueFts(issueId);
   emitAppEvent({ type: "issue", projectId: issue.project_id, issueId });
   snapshotProjectSprints(issue.project_id);
+  maybeCompleteParent(issueId);
   return getIssue(issueId)!;
+  });
+}
+
+function maybeCompleteParent(issueId: string) {
+  const issue = getIssue(issueId);
+  if (!issue?.parent_id) return;
+  const open = count(
+    `SELECT COUNT(*) as c FROM issues i
+     JOIN statuses s ON s.id = i.status_id
+     WHERE i.parent_id = ? AND i.deleted_at IS NULL AND s.category != 'done'`,
+    [issue.parent_id],
+  );
+  if (open > 0) return;
+  const parent = getIssue(issue.parent_id);
+  if (!parent) return;
+  const done = listStatuses(parent.project_id).find((s) => s.category === "done");
+  if (!done || parent.status_id === done.id) return;
+  run(`UPDATE issues SET status_id = ?, updated_at = ? WHERE id = ?`, [
+    done.id,
+    nowIso(),
+    parent.id,
+  ]);
+  logActivity({
+    projectId: parent.project_id,
+    issueId: parent.id,
+    actorId: issue.reporter_id,
+    action: "issue.updated",
+    payload: { changes: { status_id: done.id }, auto: "subtasks_done" },
+  });
+  bumpBoardVersion(parent.project_id);
 }
 
 export function moveIssue(params: {
@@ -597,6 +652,7 @@ export function moveIssue(params: {
   afterId?: string | null;
   actor: SessionUser;
 }) {
+  return withTransaction(() => {
   const issue = getIssue(params.issueId);
   if (!issue) throw new Error("NOT_FOUND");
   if (params.statusId !== issue.status_id) {
@@ -653,7 +709,9 @@ export function moveIssue(params: {
     payload: { statusId: params.statusId },
   });
   snapshotProjectSprints(issue.project_id);
+  maybeCompleteParent(params.issueId);
   return getIssue(params.issueId)!;
+  });
 }
 
 export function rebalanceRanks(projectId: string, statusId: string) {

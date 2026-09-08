@@ -73,6 +73,11 @@ export async function POST(
   const stored = `${attachmentId}_${safeName}`;
   const buffer = Buffer.from(await file.arrayBuffer());
   fs.writeFileSync(path.join(dir, stored), buffer);
+  let mime = file.type || null;
+  if (/\.svg$/i.test(file.name) || (mime && mime.includes("svg"))) {
+    mime = "image/svg+xml";
+  }
+  if (/\.html?$/i.test(file.name)) mime = "text/html";
 
   run(
     `INSERT INTO attachments (id, issue_id, uploader_id, filename, stored_name, mime_type, size_bytes, created_at)
@@ -83,7 +88,7 @@ export async function POST(
       user.id,
       file.name,
       stored,
-      file.type || null,
+      mime,
       file.size,
       nowIso(),
     ],

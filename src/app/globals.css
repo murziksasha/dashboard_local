@@ -60,3 +60,16 @@ html[data-density="compact"] .kanban-grid {
   background: #a1a1aa55;
   border-radius: 999px;
 }
+
+@media print {
+  header, aside, nav, .no-print {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

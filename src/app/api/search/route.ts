@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { searchIssues } from "@/lib/search";
+import { searchComments, searchIssues, searchPeople } from "@/lib/search";
 import { listProjectsForUser } from "@/lib/projects";
 
 export async function GET(req: Request) {
@@ -18,5 +18,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     issues,
     projects: projects.slice(0, 5).map((p) => ({ id: p.id, key: p.key, name: p.name })),
+    people: q ? searchPeople(q, 6) : [],
+    comments: q ? searchComments(user, q, 6) : [],
   });
 }

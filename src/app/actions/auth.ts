@@ -20,8 +20,10 @@ import { get, nowIso, run, settingSet } from "@/lib/db";
 import { createId } from "@/lib/id";
 import { isLdapEnabled, ldapAuthenticate } from "@/lib/ldap";
 import { clientIpFromHeaders, userAgentFromHeaders } from "@/lib/request-ip";
+import { passwordPolicyError } from "@/lib/password-policy";
 import { seedDemo } from "@/lib/seed";
 import type { SessionUser } from "@/lib/types";
+import { LoginInput, parseWith, SetupInput } from "@/lib/validation";
 
 async function loginMeta() {
   const h = await headers();
@@ -34,15 +36,18 @@ async function loginMeta() {
 export async function setupAction(formData: FormData) {
   if (isSetupComplete()) redirect("/login");
 
-  const name = String(formData.get("name") || "").trim();
-  const login = String(formData.get("login") || "").trim();
-  const password = String(formData.get("password") || "");
-  const appName = String(formData.get("appName") || "Dashboard Local").trim();
+  const parsed = parseWith(SetupInput, {
+    name: String(formData.get("name") || ""),
+    login: String(formData.get("login") || ""),
+    password: String(formData.get("password") || ""),
+    appName: String(formData.get("appName") || "Dashboard Local"),
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const { name, login, password } = parsed.data;
+  const appName = parsed.data.appName?.trim() || "Dashboard Local";
   const withDemo = formData.get("demo") === "on";
-
-  if (!name || !login || password.length < 6) {
-    return { error: "Заповніть імʼя, логін і пароль (мін. 6 символів)." };
-  }
+  const policy = passwordPolicyError(password, login);
+  if (policy) return { error: policy };
 
   const exists = get(`SELECT id FROM users WHERE login = ? COLLATE NOCASE`, [
     login,
@@ -110,8 +115,12 @@ async function ensureLdapUser(profile: {
 
 export async function loginAction(formData: FormData) {
   if (!isSetupComplete()) redirect("/setup");
-  const login = String(formData.get("login") || "").trim();
-  const password = String(formData.get("password") || "");
+  const parsed = parseWith(LoginInput, {
+    login: String(formData.get("login") || ""),
+    password: String(formData.get("password") || ""),
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const { login, password } = parsed.data;
   const { ip, userAgent } = await loginMeta();
 
   const locked = assertLoginAllowed(login, ip);
