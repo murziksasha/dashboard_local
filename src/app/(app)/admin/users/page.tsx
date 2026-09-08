@@ -57,7 +57,7 @@ export default async function AdminUsersPage() {
             </div>
             <div className="space-y-1">
               <Label>Пароль</Label>
-              <Input name="password" type="password" minLength={6} required />
+              <Input name="password" type="password" minLength={8} required />
             </div>
             <div className="space-y-1">
               <Label>Роль</Label>
@@ -119,7 +119,7 @@ export default async function AdminUsersPage() {
                         placeholder="Новий пароль"
                         className="h-8 w-36"
                         required
-                        minLength={6}
+                        minLength={8}
                       />
                       <Button type="submit" size="sm" variant="outline">
                         Reset

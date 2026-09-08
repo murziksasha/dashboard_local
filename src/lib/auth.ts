@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { all, get, nowIso, run, settingGet } from "./db";
+import { cookieSecureFlag } from "./env";
 import { createId } from "./id";
 import type { SessionUser } from "./types";
 
@@ -43,7 +44,7 @@ export async function createSession(userId: string): Promise<string> {
   jar.set(SESSION_COOKIE, id, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: cookieSecureFlag(),
     path: "/",
     expires,
   });

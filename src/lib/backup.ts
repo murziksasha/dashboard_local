@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { getBackupsDir, getDbPath, getUploadsDir } from "./paths";
 import { all, getDb, resetDbConnection, settingGet, settingSet } from "./db";
+import { toCsv } from "./csv";
 import { copyDirIfExists, dirSizeBytes, uploadsSnapshotDir } from "./uploads";
 
 function pruneBackupPair(backupsDir: string, dbName: string) {
@@ -32,7 +33,13 @@ export function createBackup(label = "manual"): string {
     // ignore
   }
   try {
+    if (!path.isAbsolute(target) || target.includes("\0") || /[\r\n]/.test(target)) {
+      throw new Error("INVALID_BACKUP_PATH");
+    }
     const escaped = target.replace(/'/g, "''");
+    if (escaped.includes("\\")) {
+      throw new Error("USE_COPY_FALLBACK");
+    }
     getDb().exec(`VACUUM INTO '${escaped}'`);
   } catch {
     fs.copyFileSync(getDbPath(), target);
@@ -120,13 +127,5 @@ export function issuesToCsv(projectId: string): string {
     "created_at",
     "updated_at",
   ];
-  const escape = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  return [
-    header.join(","),
-    ...rows.map((r) => header.map((h) => escape(r[h])).join(",")),
-  ].join("\n");
+  return toCsv(header, rows);
 }

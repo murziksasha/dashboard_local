@@ -1,5 +1,5 @@
 import { getSessionUser } from "@/lib/auth";
-import { listAppEventsSince, type AppEvent } from "@/lib/events";
+import { listAppEventsSince, onAppEvent, type AppEvent } from "@/lib/events";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +36,11 @@ export async function GET(req: Request) {
         }
       };
       flush();
-      const poll = setInterval(flush, 1500);
+      const off = onAppEvent((e) => {
+        lastId = Math.max(lastId, e.id ?? lastId);
+        send(e);
+      });
+      const poll = setInterval(flush, 8000);
       const ping = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(`: ping\n\n`));
@@ -47,6 +51,7 @@ export async function GET(req: Request) {
       const abort = () => {
         clearInterval(poll);
         clearInterval(ping);
+        off();
         try {
           controller.close();
         } catch {

@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { all, nowIso, run } from "./db";
+import { log } from "./logger";
 
 export type AppEvent = {
   id?: number;
@@ -39,7 +40,8 @@ export function persistAppEvent(event: AppEvent): number | undefined {
     );
     const id = Number((info as { lastInsertRowid?: number | bigint }).lastInsertRowid);
     return Number.isFinite(id) ? id : undefined;
-  } catch {
+  } catch (e) {
+    log.caught("events.persist_failed", e);
     return undefined;
   }
 }
@@ -50,6 +52,9 @@ export function emitAppEvent(event: AppEvent) {
   bus().emit("app", next);
   if (event.projectId) bus().emit(`project:${event.projectId}`, next);
   if (event.userId) bus().emit(`user:${event.userId}`, next);
+  void import("./webhooks")
+    .then((m) => m.dispatchWebhooks(next))
+    .catch((e) => log.caught("events.webhooks", e));
 }
 
 export function onAppEvent(fn: (e: AppEvent) => void) {

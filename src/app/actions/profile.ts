@@ -29,7 +29,9 @@ export async function changeOwnPasswordAction(formData: FormData) {
   const current = String(formData.get("current_password") || "");
   const next = String(formData.get("new_password") || "");
   const confirm = String(formData.get("confirm_password") || "");
-  if (next.length < 6) return { error: "Новий пароль мінімум 6 символів." };
+  const { passwordPolicyError } = await import("@/lib/password-policy");
+  const policy = passwordPolicyError(next);
+  if (policy) return { error: policy };
   if (next !== confirm) return { error: "Паролі не збігаються." };
 
   const row = get<{ password_hash: string }>(

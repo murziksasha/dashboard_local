@@ -6,6 +6,8 @@ import { Dialog } from "@/components/ui/dialog";
 
 type Hit = { id: string; key: string; title: string; project_id: string; project_key: string };
 type Proj = { id: string; key: string; name: string };
+type Person = { id: string; name: string; login: string };
+type CommentHit = { id: string; issue_id: string; issue_key: string; project_id: string; snippet: string };
 
 export function CommandPalette() {
   const router = useRouter();
@@ -14,6 +16,8 @@ export function CommandPalette() {
   const [q, setQ] = useState("");
   const [issues, setIssues] = useState<Hit[]>([]);
   const [projects, setProjects] = useState<Proj[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [comments, setComments] = useState<CommentHit[]>([]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -56,9 +60,16 @@ export function CommandPalette() {
     const t = setTimeout(async () => {
       const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
       if (!res.ok) return;
-      const data = (await res.json()) as { issues: Hit[]; projects: Proj[] };
+      const data = (await res.json()) as {
+        issues: Hit[];
+        projects: Proj[];
+        people?: Person[];
+        comments?: CommentHit[];
+      };
       setIssues(data.issues || []);
       setProjects(data.projects || []);
+      setPeople(data.people || []);
+      setComments(data.comments || []);
     }, 150);
     return () => clearTimeout(t);
   }, [q, open]);
@@ -100,7 +111,25 @@ export function CommandPalette() {
               <span className="font-medium text-sky-600">{i.key}</span> {i.title}
             </button>
           ))}
-          {q && !issues.length && !projects.length ? (
+          {people.map((p) => (
+            <p key={p.id} className="px-2 py-1.5 text-sm text-zinc-600 dark:text-zinc-300">
+              👤 {p.name} <span className="text-zinc-400">@{p.login}</span>
+            </p>
+          ))}
+          {comments.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className="block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800"
+              onClick={() => {
+                setOpen(false);
+                router.push(`/projects/${c.project_id}/issues/${c.issue_id}`);
+              }}
+            >
+              💬 {c.issue_key}: {c.snippet}
+            </button>
+          ))}
+          {q && !issues.length && !projects.length && !people.length && !comments.length ? (
             <p className="px-2 py-2 text-zinc-500">Нічого не знайдено.</p>
           ) : null}
         </div>
@@ -111,7 +140,13 @@ export function CommandPalette() {
             <kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>/</kbd> — пошук
           </li>
           <li>
-            <kbd>c</kbd> — нова задача (на екрані проєкту)
+            <kbd>c</kbd> / <kbd>n</kbd> — нова задача (на екрані проєкту)
+          </li>
+          <li>
+            <kbd>↑</kbd>/<kbd>↓</kbd> — навігація картками на дошці
+          </li>
+          <li>
+            <kbd>e</kbd> — відкрити вибрану задачу
           </li>
           <li>
             <kbd>Esc</kbd> — закрити панель

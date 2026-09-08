@@ -4,8 +4,9 @@ import fs from "fs";
 import path from "path";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { all, get, nowIso, run } from "@/lib/db";
-import { createId } from "@/lib/id";
+import { createId, packedRanks } from "@/lib/id";
 import { addComment, createIssue, moveIssue, updateIssue } from "@/lib/issues";
 import { logActivity } from "@/lib/activity";
 import { bumpBoardVersion } from "@/lib/projects";
@@ -18,16 +19,32 @@ import {
 import { parseAssigneeIds } from "@/lib/assignees";
 import { loadIssueWorkspace } from "@/lib/issue-workspace";
 import { getUploadsDir } from "@/lib/paths";
+import { hardDeleteIssue } from "@/lib/purge";
+import { snapshotProjectSprints } from "@/lib/reports";
+import { removeIssueFts, upsertIssueFts } from "@/lib/search";
+import { withTransaction } from "@/lib/tx";
 import type { IssueType, LinkType, Priority } from "@/lib/types";
 import { parseDurationToSeconds } from "@/lib/utils";
+import { CreateIssueInput, parseWith } from "@/lib/validation";
 
 export async function createIssueAction(formData: FormData) {
   const user = await requireUser();
-  const projectId = String(formData.get("projectId") || "");
+  const parsed = parseWith(CreateIssueInput, {
+    projectId: String(formData.get("projectId") || ""),
+    title: String(formData.get("title") || ""),
+    type: String(formData.get("type") || "task") || "task",
+    description: String(formData.get("description") || "") || undefined,
+    statusId: String(formData.get("statusId") || "") || undefined,
+    priority: String(formData.get("priority") || "medium") || "medium",
+    parentId: String(formData.get("parentId") || "") || undefined,
+    epicId: String(formData.get("epicId") || "") || undefined,
+    sprintId: String(formData.get("sprintId") || "") || undefined,
+  });
+  if (!parsed.ok) return { error: parsed.error };
+  const projectId = parsed.data.projectId;
   if (!canEditIssues(user, projectId)) throw new Error("FORBIDDEN");
 
-  const title = String(formData.get("title") || "").trim();
-  if (!title) return { error: "Заголовок обовʼязковий." };
+  const title = parsed.data.title;
 
   const labels = String(formData.get("labels") || "")
     .split(",")
@@ -39,17 +56,17 @@ export async function createIssueAction(formData: FormData) {
 
   const issue = createIssue({
     projectId,
-    type: String(formData.get("type") || "task") as IssueType,
+    type: parsed.data.type || "task",
     title,
-    description: String(formData.get("description") || "") || undefined,
-    statusId: String(formData.get("statusId") || "") || undefined,
-    priority: (String(formData.get("priority") || "medium") as Priority) || "medium",
+    description: parsed.data.description,
+    statusId: parsed.data.statusId || undefined,
+    priority: parsed.data.priority || "medium",
     assigneeIds: parseAssigneeIds(formData),
     reporterId: user.id,
     startDate: String(formData.get("start_date") || "") || null,
-    parentId: String(formData.get("parentId") || "") || null,
-    epicId: String(formData.get("epicId") || "") || null,
-    sprintId: String(formData.get("sprintId") || "") || null,
+    parentId: parsed.data.parentId || null,
+    epicId: parsed.data.epicId || null,
+    sprintId: parsed.data.sprintId || null,
     storyPoints: storyPointsRaw ? Number(storyPointsRaw) : null,
     originalEstimateSec: estimateRaw ? Number(estimateRaw) : null,
     dueDate: String(formData.get("due_date") || "") || null,
@@ -421,15 +438,17 @@ export async function reorderBacklogAction(issueIds: string[]) {
   );
   if (!first) throw new Error("NOT_FOUND");
   if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
-  let rank = "a";
-  for (const id of issueIds) {
-    run(`UPDATE issues SET rank = ?, updated_at = ? WHERE id = ?`, [
-      rank,
-      nowIso(),
-      id,
-    ]);
-    rank += "a";
-  }
+  const ts = nowIso();
+  const ranks = packedRanks(issueIds.length);
+  withTransaction(() => {
+    issueIds.forEach((id, i) => {
+      run(`UPDATE issues SET rank = ?, updated_at = ? WHERE id = ?`, [
+        ranks[i],
+        ts,
+        id,
+      ]);
+    });
+  });
   bumpBoardVersion(first.project_id);
   revalidatePath(`/projects/${first.project_id}/backlog`);
   return { ok: true };
@@ -566,9 +585,10 @@ export async function deleteIssueAction(issueId: string) {
   );
   if (!issue) return { error: "Не знайдено." };
   if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
+  const ts = nowIso();
   run(`UPDATE issues SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-    nowIso(),
-    nowIso(),
+    ts,
+    ts,
     issueId,
   ]);
   logActivity({
@@ -577,19 +597,15 @@ export async function deleteIssueAction(issueId: string) {
     action: "issue.deleted",
     payload: { key: issue.key, issueId },
   });
+  logAudit({
+    action: "issue.delete",
+    userId: user.id,
+    login: user.login,
+    detail: issue.key,
+  });
   bumpBoardVersion(issue.project_id);
-  try {
-    const { removeIssueFts } = await import("@/lib/search");
-    removeIssueFts(issueId);
-  } catch {
-    // ignore
-  }
-  try {
-    const { snapshotProjectSprints } = await import("@/lib/reports");
-    snapshotProjectSprints(issue.project_id);
-  } catch {
-    // ignore
-  }
+  removeIssueFts(issueId);
+  snapshotProjectSprints(issue.project_id);
   revalidatePath(`/projects/${issue.project_id}`);
   revalidatePath(`/projects/${issue.project_id}/trash`);
   return { ok: true, projectId: issue.project_id };
@@ -608,18 +624,8 @@ export async function restoreIssueAction(issueId: string) {
     issueId,
   ]);
   bumpBoardVersion(issue.project_id);
-  try {
-    const { upsertIssueFts } = await import("@/lib/search");
-    upsertIssueFts(issueId);
-  } catch {
-    // ignore
-  }
-  try {
-    const { snapshotProjectSprints } = await import("@/lib/reports");
-    snapshotProjectSprints(issue.project_id);
-  } catch {
-    // ignore
-  }
+  upsertIssueFts(issueId);
+  snapshotProjectSprints(issue.project_id);
   revalidatePath(`/projects/${issue.project_id}`);
   revalidatePath(`/projects/${issue.project_id}/trash`);
   return { ok: true };
@@ -633,14 +639,8 @@ export async function purgeIssueAction(issueId: string) {
   );
   if (!issue) return { error: "Не знайдено." };
   if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
-  const { hardDeleteIssue } = await import("@/lib/purge");
   hardDeleteIssue(issueId, issue.project_id);
-  try {
-    const { snapshotProjectSprints } = await import("@/lib/reports");
-    snapshotProjectSprints(issue.project_id);
-  } catch {
-    // ignore
-  }
+  snapshotProjectSprints(issue.project_id);
   revalidatePath(`/projects/${issue.project_id}`);
   revalidatePath(`/projects/${issue.project_id}/trash`);
   return { ok: true };
@@ -661,15 +661,17 @@ export async function bulkUpdateIssuesAction(input: {
   if (!first) throw new Error("NOT_FOUND");
   if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
 
-  for (const id of input.issueIds) {
-    const patch: Parameters<typeof updateIssue>[2] = {};
-    if (input.statusId) patch.statusId = input.statusId;
-    if (input.assigneeIds) patch.assigneeIds = input.assigneeIds;
-    else if (input.assigneeId !== undefined) {
-      patch.assigneeIds = input.assigneeId ? [input.assigneeId] : [];
+  withTransaction(() => {
+    for (const id of input.issueIds) {
+      const patch: Parameters<typeof updateIssue>[2] = {};
+      if (input.statusId) patch.statusId = input.statusId;
+      if (input.assigneeIds) patch.assigneeIds = input.assigneeIds;
+      else if (input.assigneeId !== undefined) {
+        patch.assigneeIds = input.assigneeId ? [input.assigneeId] : [];
+      }
+      if (Object.keys(patch).length) updateIssue(id, user, patch);
     }
-    if (Object.keys(patch).length) updateIssue(id, user, patch);
-  }
+  });
   revalidatePath(`/projects/${first.project_id}`);
   revalidatePath(`/projects/${first.project_id}/list`);
   return { ok: true };

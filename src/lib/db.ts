@@ -6,6 +6,7 @@ import {
   getDbPath,
   getUploadsDir,
 } from "./paths";
+import { assertSqlIdent } from "./sql-ident";
 
 declare global {
   var __dashboardDb: DatabaseSync | undefined;
@@ -355,10 +356,70 @@ function migrate(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_events(action, created_at);
     CREATE INDEX IF NOT EXISTS idx_app_events_created ON app_events(created_at);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT,
+      events TEXT NOT NULL DEFAULT '*',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT REFERENCES webhooks(id) ON DELETE CASCADE,
+      status INTEGER,
+      error TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries ON webhook_deliveries(webhook_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS issue_templates (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'task',
+      title TEXT,
+      description TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      labels TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS recurring_issues (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      type TEXT NOT NULL DEFAULT 'task',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      frequency TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+      next_run_at TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS comment_reactions (
+      comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (comment_id, user_id, emoji)
+    );
   `);
 
   ensureColumn(db, "issues", "start_date", "TEXT");
   ensureColumn(db, "issues", "deleted_at", "TEXT");
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_issues_board ON issues(project_id, deleted_at, status_id);
+      CREATE INDEX IF NOT EXISTS idx_issues_live ON issues(project_id) WHERE deleted_at IS NULL;
+    `);
+  } catch {
+    // older sqlite without partial indexes
+  }
   try {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
@@ -376,9 +437,14 @@ function migrate(db: DatabaseSync) {
 }
 
 function ensureColumn(db: DatabaseSync, table: string, column: string, typeSql: string) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
+  const t = assertSqlIdent(table, "table");
+  const c = assertSqlIdent(column, "column");
+  if (!/^(TEXT|INTEGER|REAL|BLOB|NUMERIC)(\s+.*)?$/i.test(typeSql.trim())) {
+    throw new Error("Invalid SQL type");
+  }
+  const cols = db.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>;
+  if (!cols.some((col) => col.name === c)) {
+    db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${typeSql}`);
   }
 }
 
@@ -391,8 +457,28 @@ export function getDb(): DatabaseSync {
   return db;
 }
 
+const PREPARE_CACHE_MAX = 128;
+const prepareCache = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
+
+function cachedPrepare(sql: string) {
+  const hit = prepareCache.get(sql);
+  if (hit) return hit;
+  const stmt = getDb().prepare(sql);
+  prepareCache.set(sql, stmt);
+  if (prepareCache.size > PREPARE_CACHE_MAX) {
+    const first = prepareCache.keys().next().value;
+    if (first) prepareCache.delete(first);
+  }
+  return stmt;
+}
+
+function clearPrepareCache() {
+  prepareCache.clear();
+}
+
 /** Close and forget the singleton (for tests / restore). */
 export function resetDbConnection() {
+  clearPrepareCache();
   try {
     global.__dashboardDb?.close();
   } catch {
@@ -410,25 +496,29 @@ export type Row = Record<string, unknown>;
 /** node:sqlite returns null-prototype objects; React client props need plain objects. */
 function plain<T>(value: T): T {
   if (value == null || typeof value !== "object") return value;
-  return JSON.parse(JSON.stringify(value)) as T;
+  try {
+    return structuredClone(value);
+  } catch {
+    return { ...value } as T;
+  }
 }
 
 export function all<T = Row>(sql: string, params: unknown[] = []): T[] {
-  return plain(getDb().prepare(sql).all(...params) as T[]);
+  return plain(cachedPrepare(sql).all(...params) as T[]);
 }
 
 export function get<T = Row>(sql: string, params: unknown[] = []): T | undefined {
-  const row = getDb().prepare(sql).get(...params) as T | undefined;
+  const row = cachedPrepare(sql).get(...params) as T | undefined;
   return row === undefined ? undefined : plain(row);
 }
 
 export function run(sql: string, params: unknown[] = []) {
-  return getDb().prepare(sql).run(...params);
+  return cachedPrepare(sql).run(...params);
 }
 
 /** Scalar COUNT(*) helper — skips JSON round-trip used by all()/get(). */
 export function count(sql: string, params: unknown[] = []): number {
-  const row = getDb().prepare(sql).get(...params) as { c?: number } | undefined;
+  const row = cachedPrepare(sql).get(...params) as { c?: number } | undefined;
   return Number(row?.c ?? 0);
 }
 

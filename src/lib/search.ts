@@ -2,13 +2,21 @@ import { all, getDb, run } from "./db";
 import { listProjectsForUser } from "./projects";
 import type { SessionUser } from "./types";
 
+let ftsCached: boolean | null = null;
+
 function ftsAvailable(): boolean {
+  if (ftsCached != null) return ftsCached;
   try {
     getDb().exec(`SELECT 1 FROM issues_fts LIMIT 1`);
-    return true;
+    ftsCached = true;
   } catch {
-    return false;
+    ftsCached = false;
   }
+  return ftsCached;
+}
+
+export function resetFtsCache() {
+  ftsCached = null;
 }
 
 export function upsertIssueFts(issueId: string) {
@@ -47,6 +55,9 @@ export function removeIssueFts(issueId: string) {
 
 export function backfillIssueFts() {
   if (!ftsAvailable()) return;
+  const live = all<{ c: number }>(`SELECT COUNT(*) as c FROM issues WHERE deleted_at IS NULL`)[0]?.c ?? 0;
+  const indexed = all<{ c: number }>(`SELECT COUNT(*) as c FROM issues_fts`)[0]?.c ?? 0;
+  if (live === 0 || indexed >= live) return;
   const rows = all<{ id: string }>(`SELECT id FROM issues WHERE deleted_at IS NULL`);
   for (const row of rows) upsertIssueFts(row.id);
 }
@@ -95,6 +106,50 @@ export function searchIssues(user: SessionUser, query: string, limit = 20): Sear
        AND (i.title LIKE ? OR i.key LIKE ? OR i.description LIKE ?)
      ORDER BY i.updated_at DESC LIMIT ?`,
     [...ids, like, like, like, limit],
+  );
+}
+
+export type PeopleHit = { id: string; name: string; login: string };
+export type CommentHit = {
+  id: string;
+  issue_id: string;
+  issue_key: string;
+  project_id: string;
+  snippet: string;
+};
+
+export function searchPeople(query: string, limit = 8): PeopleHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  const like = `%${q}%`;
+  return all<PeopleHit>(
+    `SELECT id, name, login FROM users
+     WHERE active = 1 AND (name LIKE ? OR login LIKE ? OR email LIKE ?)
+     ORDER BY name LIMIT ?`,
+    [like, like, like, limit],
+  );
+}
+
+export function searchComments(
+  user: SessionUser,
+  query: string,
+  limit = 8,
+): CommentHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  const projects = listProjectsForUser(user);
+  if (!projects.length) return [];
+  const ids = projects.map((p) => p.id);
+  const inList = ids.map(() => "?").join(",");
+  const like = `%${q}%`;
+  return all<CommentHit>(
+    `SELECT c.id, c.issue_id, i.key as issue_key, i.project_id,
+            substr(c.body, 1, 140) as snippet
+     FROM comments c
+     JOIN issues i ON i.id = c.issue_id
+     WHERE i.project_id IN (${inList}) AND i.deleted_at IS NULL AND c.body LIKE ?
+     ORDER BY c.created_at DESC LIMIT ?`,
+    [...ids, like, limit],
   );
 }
 

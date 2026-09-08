@@ -81,13 +81,15 @@ export async function exchangeOidcCode(params: {
 
   if ((!profile.email || !claims?.name) && tokens.access_token) {
     try {
+      const expectedSub = profile.sub || String(claims?.sub || "");
+      if (!expectedSub) throw new Error("OIDC_NO_SUBJECT");
       const info = await oidc.fetchUserInfo(
         config,
         tokens.access_token,
-        oidc.skipSubjectCheck,
+        expectedSub,
       );
       profile = {
-        sub: profile.sub || String(info.sub || ""),
+        sub: expectedSub,
         email: (info.email as string | undefined) || profile.email,
         name:
           (info.name as string | undefined) ||

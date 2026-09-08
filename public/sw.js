@@ -1,4 +1,4 @@
-const CACHE = "dl-shell-v2";
+const CACHE = "dl-shell-v3";
 const ASSETS = ["/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -17,18 +17,19 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  const isStatic = url.pathname.startsWith("/_next/static") || url.pathname.startsWith("/icons/");
-  if (isStatic) {
+  const hashedStatic = url.pathname.startsWith("/_next/static");
+  const icons = url.pathname.startsWith("/icons/");
+  if (hashedStatic || icons) {
     event.respondWith(
-      caches.match(req).then(
-        (cached) =>
-          cached ||
-          fetch(req).then((res) => {
+      fetch(req)
+        .then((res) => {
+          if (res.ok) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-            return res;
-          }),
-      ),
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((cached) => cached || Promise.reject())),
     );
     return;
   }

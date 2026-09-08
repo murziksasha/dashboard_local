@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import { PwaRegister } from "@/components/pwa-register";
 import { ThemeProvider } from "@/components/theme-provider";
+import { ToastProvider } from "@/components/ui/toast";
+import { isLocale, LOCALE_COOKIE } from "@/lib/i18n";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -32,19 +35,23 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const localeRaw = (await cookies()).get(LOCALE_COOKIE)?.value;
+  const locale = isLocale(localeRaw) ? localeRaw : "uk";
   return (
-    <html lang="uk" suppressHydrationWarning>
+    <html lang={locale} suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen antialiased`}
       >
         <ThemeProvider>
-          <PwaRegister />
-          {children}
+          <ToastProvider>
+            <PwaRegister />
+            {children}
+          </ToastProvider>
         </ThemeProvider>
       </body>
     </html>

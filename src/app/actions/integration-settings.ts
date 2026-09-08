@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { settingSet } from "@/lib/db";
+import { settingSetSecret } from "@/lib/secrets";
 
 export async function updateOidcSettingsAction(formData: FormData) {
   await requireAdmin();
@@ -36,16 +37,15 @@ export async function updateNotifySettingsAction(formData: FormData) {
   settingSet("smtp_host", String(formData.get("smtp_host") || "").trim());
   settingSet("smtp_port", String(formData.get("smtp_port") || "587").trim());
   settingSet("smtp_user", String(formData.get("smtp_user") || "").trim());
-  settingSet("smtp_pass", String(formData.get("smtp_pass") || "").trim());
+  const smtpPass = String(formData.get("smtp_pass") || "").trim();
+  if (smtpPass && smtpPass !== "••••••••") settingSetSecret("smtp_pass", smtpPass);
   settingSet("smtp_from", String(formData.get("smtp_from") || "").trim());
   settingSet(
     "notify_telegram_enabled",
     formData.get("notify_telegram_enabled") === "on" ? "1" : "0",
   );
-  settingSet(
-    "telegram_bot_token",
-    String(formData.get("telegram_bot_token") || "").trim(),
-  );
+  const tg = String(formData.get("telegram_bot_token") || "").trim();
+  if (tg && tg !== "••••••••") settingSetSecret("telegram_bot_token", tg);
   settingSet(
     "telegram_default_chat",
     String(formData.get("telegram_default_chat") || "").trim(),

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { listIssues, listBoardIssues, listEpics, type BoardIssueRow, type IssueRow } from "./issues";
+import { listIssues, listEpics, type BoardIssueRow, type IssueRow } from "./issues";
 import {
   assertProjectAccess,
   canEditIssues,

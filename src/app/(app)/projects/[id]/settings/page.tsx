@@ -24,6 +24,18 @@ import { canManageProject } from "@/lib/permissions";
 import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
 import { PROJECT_ROLE_LABELS } from "@/lib/types";
 import { listWorkflowRules } from "@/lib/workflow";
+import { createWebhookAction, deleteWebhookAction } from "@/app/actions/webhooks";
+import {
+  createRecurringAction,
+  createTemplateAction,
+  deleteRecurringAction,
+  deleteTemplateAction,
+  seedTemplatesAction,
+} from "@/app/actions/templates";
+import { importCsvAction } from "@/app/actions/import-export";
+import { listIssueTemplates } from "@/lib/issue-templates";
+import { listRecurring } from "@/lib/recurring";
+import { listWebhooks } from "@/lib/webhooks";
 
 export default async function ProjectSettingsPage({
   params,
@@ -57,6 +69,9 @@ export default async function ProjectSettingsPage({
     [id],
   );
   const workflowRules = listWorkflowRules(id);
+  const templates = listIssueTemplates(id);
+  const recurring = listRecurring(id);
+  const webhooks = listWebhooks(id);
 
   return (
     <div className="space-y-4">
@@ -309,6 +324,162 @@ export default async function ProjectSettingsPage({
               </div>
               <Button type="submit" size="sm" className="md:col-span-2 w-fit">
                 Додати правило
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Шаблони задач</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {templates.map((t) => (
+              <div key={t.id} className="flex items-center justify-between text-sm">
+                <span>
+                  {t.name} · {t.type}
+                </span>
+                <form
+                  action={async () => {
+                    "use server";
+                    await deleteTemplateAction(t.id, id);
+                  }}
+                >
+                  <Button type="submit" size="sm" variant="ghost">
+                    Видалити
+                  </Button>
+                </form>
+              </div>
+            ))}
+            <form
+              action={async (fd) => {
+                "use server";
+                await createTemplateAction(fd);
+              }}
+              className="grid gap-2"
+            >
+              <input type="hidden" name="projectId" value={id} />
+              <Input name="name" placeholder="Назва шаблону" required />
+              <Select name="type" defaultValue="task">
+                <option value="task">task</option>
+                <option value="bug">bug</option>
+                <option value="story">story</option>
+              </Select>
+              <Button type="submit" size="sm">
+                Додати шаблон
+              </Button>
+            </form>
+            <form
+              action={async () => {
+                "use server";
+                await seedTemplatesAction(id);
+              }}
+            >
+              <Button type="submit" size="sm" variant="secondary">
+                Базові шаблони
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Рекурентні задачі</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {recurring.map((r) => (
+              <div key={r.id} className="flex items-center justify-between text-sm">
+                <span>
+                  {r.title} · {r.frequency}
+                </span>
+                <form
+                  action={async () => {
+                    "use server";
+                    await deleteRecurringAction(r.id, id);
+                  }}
+                >
+                  <Button type="submit" size="sm" variant="ghost">
+                    Видалити
+                  </Button>
+                </form>
+              </div>
+            ))}
+            <form
+              action={async (fd) => {
+                "use server";
+                await createRecurringAction(fd);
+              }}
+              className="grid gap-2"
+            >
+              <input type="hidden" name="projectId" value={id} />
+              <Input name="title" placeholder="Заголовок" required />
+              <Select name="frequency" defaultValue="weekly">
+                <option value="daily">щодня</option>
+                <option value="weekly">щотижня</option>
+                <option value="monthly">щомісяця</option>
+              </Select>
+              <Button type="submit" size="sm">
+                Додати
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Імпорт CSV</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form
+              action={async (fd) => {
+                "use server";
+                await importCsvAction(fd);
+              }}
+              className="space-y-2"
+            >
+              <input type="hidden" name="projectId" value={id} />
+              <Input name="file" type="file" accept=".csv,text/csv" />
+              <p className="text-xs text-zinc-500">Колонки: title, type, priority, description, due_date, labels, status</p>
+              <Button type="submit" size="sm">
+                Імпортувати
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Вебхуки</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {webhooks.map((w) => (
+              <div key={w.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className="truncate">{w.url}</span>
+                <form
+                  action={async () => {
+                    "use server";
+                    await deleteWebhookAction(w.id, id);
+                  }}
+                >
+                  <Button type="submit" size="sm" variant="ghost">
+                    Видалити
+                  </Button>
+                </form>
+              </div>
+            ))}
+            <form
+              action={async (fd) => {
+                "use server";
+                await createWebhookAction(fd);
+              }}
+              className="grid gap-2"
+            >
+              <input type="hidden" name="projectId" value={id} />
+              <Input name="url" placeholder="https://example.com/hook" required />
+              <Input name="secret" placeholder="HMAC secret (опційно)" />
+              <Input name="events" placeholder="* або board,issue,notification" defaultValue="*" />
+              <Button type="submit" size="sm">
+                Додати вебхук
               </Button>
             </form>
           </CardContent>

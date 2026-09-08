@@ -127,8 +127,24 @@ export function runJql(
     if (dir === "desc" || dir === "asc") orderDir = dir;
   }
 
-  const allProjectIssues = listIssues(projectId, { limit: 5000 });
   const needsHistory = /\b(was|changed)\b/i.test(trimmed);
+  const prefilter: Parameters<typeof listIssues>[1] = {};
+  for (let i = 0; i < whereTokens.length - 2; i++) {
+    const fieldTok = whereTokens[i];
+    const opTok = whereTokens[i + 1];
+    const valTok = whereTokens[i + 2];
+    if (fieldTok?.type !== "word" || opTok?.type !== "op" || opTok.value !== "=") continue;
+    const field = fieldTok.value.toLowerCase();
+    const val = valueOf(valTok).toLowerCase();
+    if (field === "type" && ["epic", "story", "task", "bug", "subtask"].includes(val)) {
+      prefilter.types = [val as IssueRow["type"]];
+    }
+    if (field === "priority" && ["highest", "high", "medium", "low", "lowest"].includes(val)) {
+      prefilter.priorities = [val as NonNullable<IssueRow["priority"]>];
+    }
+  }
+  if (needsHistory && !prefilter.limit) prefilter.limit = 5000;
+  const allProjectIssues = listIssues(projectId, prefilter);
   const users = all<{ id: string; login: string; name: string }>(
     `SELECT id, login, name FROM users`,
   );

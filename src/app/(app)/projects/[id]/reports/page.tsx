@@ -1,3 +1,4 @@
+import { PrintButton } from "@/components/print-button";
 import { BurndownChart } from "@/components/projects/burndown-chart";
 import { ProjectNav } from "@/components/projects/project-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,7 +39,10 @@ export default async function ReportsPage({
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">{ctx.project.name} — звіти</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold">{ctx.project.name} — звіти</h1>
+        <PrintButton />
+      </div>
       <ProjectNav projectId={id} />
 
       <Card>

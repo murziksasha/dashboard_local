@@ -7,6 +7,7 @@ import { ProjectNav } from "@/components/projects/project-nav";
 import { Badge } from "@/components/ui/badge";
 import { requireUser } from "@/lib/auth";
 import { listBoardIssues, listEpics } from "@/lib/issues";
+import { listIssueTemplates, seedBuiltinTemplates } from "@/lib/issue-templates";
 import { listProjectLabels } from "@/lib/issue-workspace";
 import { canComment } from "@/lib/permissions";
 import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
@@ -27,6 +28,9 @@ export default async function ProjectBoardPage({
   const { users } = loadProjectPeople(id);
   const sprints = listProjectSprints(id);
   const epics = listEpics(id);
+  const templates = listIssueTemplates(id).length
+    ? listIssueTemplates(id)
+    : seedBuiltinTemplates(id);
   const activeSprint = sprints.find((s) => s.status === "active");
   const scope =
     sp.scope === "all" ? "all" : sp.scope === "sprint" ? "sprint" : activeSprint ? "sprint" : "all";
@@ -81,6 +85,7 @@ export default async function ProjectBoardPage({
             sprints={sprints.filter((s) => s.status !== "closed")}
             epics={epics}
             defaultSprintId={activeSprint?.id}
+            templates={templates}
           />
         ) : null}
       </div>

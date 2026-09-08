@@ -1,7 +1,10 @@
 /**
  * One-shot local smoke: create admin + demo if DB not set up yet.
  * Usage: npx tsx scripts/smoke-setup.ts
+ *
+ * WARNING: this script is for local tests / CI only. It creates a known password.
  */
+console.warn("smoke-setup.ts is for tests and local smoke only — do not use in production.");
 import { hashPassword, isSetupComplete } from "../src/lib/auth";
 import { get, nowIso, run, settingSet } from "../src/lib/db";
 import { createId } from "../src/lib/id";

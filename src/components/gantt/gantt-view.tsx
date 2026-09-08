@@ -129,7 +129,8 @@ export function GanttView({
 
   function onPointerMove(e: React.PointerEvent) {
     if (!dragging || !canEdit) return;
-    const deltaDays = Math.round((e.clientX - dragging.startX) / dayWidth);
+    const raw = Math.round((e.clientX - dragging.startX) / dayWidth);
+    const deltaDays = dayWidth <= 16 ? Math.round(raw / 7) * 7 : raw;
     if (dragging.mode === "move") {
       const ns = addDays(dragging.origStart, deltaDays);
       const ne = addDays(dragging.origEnd, deltaDays);

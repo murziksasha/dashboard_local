@@ -20,10 +20,12 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createIssueAction, moveIssueAction } from "@/app/actions/issues";
+import { createIssueAction, moveIssueAction, updateIssueAction } from "@/app/actions/issues";
 import { useIssueDrawer } from "@/components/issues/issue-drawer";
+import { BoardSkeleton } from "@/components/ui/skeleton";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/toast";
 import { PRIORITY_LABELS, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -87,11 +89,17 @@ function IssueCard({
   projectId,
   dragging,
   onOpen,
+  canEdit,
+  statuses,
+  onQuick,
 }: {
   issue: BoardIssue;
   projectId: string;
   dragging?: boolean;
   onOpen?: (id: string) => void;
+  canEdit?: boolean;
+  statuses?: BoardStatus[];
+  onQuick?: (id: string, patch: Record<string, string>) => void;
 }) {
   const people = assigneeList(issue);
   const labels = (issue.labels || "")
@@ -102,7 +110,7 @@ function IssueCard({
     <Link
       href={`/projects/${projectId}/issues/${issue.id}`}
       className={cn(
-        "block rounded-lg border border-zinc-200 bg-white p-3 shadow-sm hover:border-sky-300 dark:border-zinc-700 dark:bg-zinc-900",
+        "group block rounded-lg border border-zinc-200 bg-white p-3 shadow-sm hover:border-sky-300 dark:border-zinc-700 dark:bg-zinc-900",
         dragging && "opacity-50",
       )}
       onClick={(e) => {
@@ -137,6 +145,27 @@ function IssueCard({
         </Badge>
       </div>
       <p className="line-clamp-2 text-sm font-medium leading-snug">{issue.title}</p>
+      {canEdit && onQuick ? (
+        <div
+          className="mt-1 hidden gap-1 group-hover:flex"
+          onClick={(e) => e.preventDefault()}
+        >
+          {(statuses || []).slice(0, 4).map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onQuick(issue.id, { statusId: s.id });
+              }}
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {labels.length ? (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {labels.slice(0, 2).map((l) => (
@@ -176,10 +205,16 @@ function SortableIssue({
   issue,
   projectId,
   onOpen,
+  canEdit,
+  statuses,
+  onQuick,
 }: {
   issue: BoardIssue;
   projectId: string;
   onOpen?: (id: string) => void;
+  canEdit?: boolean;
+  statuses?: BoardStatus[];
+  onQuick?: (id: string, patch: Record<string, string>) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({
@@ -202,7 +237,15 @@ function SortableIssue({
         ⋮⋮
       </button>
       <div className="min-w-0 flex-1">
-        <IssueCard issue={issue} projectId={projectId} dragging={isDragging} onOpen={onOpen} />
+        <IssueCard
+          issue={issue}
+          projectId={projectId}
+          dragging={isDragging}
+          onOpen={onOpen}
+          canEdit={canEdit}
+          statuses={statuses}
+          onQuick={onQuick}
+        />
       </div>
     </div>
   );
@@ -216,6 +259,8 @@ function Column({
   canEdit,
   onQuickAdd,
   onOpen,
+  onQuick,
+  allStatuses,
 }: {
   status: BoardStatus;
   issues: BoardIssue[];
@@ -224,6 +269,8 @@ function Column({
   canEdit: boolean;
   onQuickAdd: (statusId: string, title: string) => void;
   onOpen?: (id: string) => void;
+  onQuick?: (id: string, patch: Record<string, string>) => void;
+  allStatuses?: BoardStatus[];
 }) {
   const droppableId = `${laneId}::${status.id}`;
   const { setNodeRef, isOver } = useDroppable({
@@ -238,6 +285,7 @@ function Column({
       className={cn(
         "flex min-h-[140px] min-w-0 flex-col rounded-xl border border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/40",
         isOver && "ring-2 ring-sky-400",
+        overWip && "border-rose-400 bg-rose-50/70 ring-2 ring-rose-400 dark:border-rose-700 dark:bg-rose-950/30",
       )}
     >
       <div className="flex items-center justify-between gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
@@ -262,6 +310,9 @@ function Column({
               issue={issue}
               projectId={projectId}
               onOpen={onOpen}
+              canEdit={canEdit}
+              statuses={allStatuses}
+              onQuick={onQuick}
             />
           ))}
         </div>
@@ -372,7 +423,7 @@ export function KanbanBoard(props: {
   defaultSprintId?: string;
 }) {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Дошка…</p>}>
+    <Suspense fallback={<BoardSkeleton />}>
       <KanbanBoardInner {...props} />
     </Suspense>
   );
@@ -395,12 +446,14 @@ function KanbanBoardInner({
 }) {
   const router = useRouter();
   const openIssue = useIssueDrawer();
+  const toast = useToast();
   const [statuses] = useState(initialStatuses);
   const [issues, setIssues] = useState(initialIssues);
   const [version, setVersion] = useState(boardVersion);
   const [stale, setStale] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [swimlane, setSwimlane] = useState<SwimlaneMode>("none");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const sensors = useSensors(
@@ -446,6 +499,48 @@ function KanbanBoardInner({
       es?.close();
     };
   }, [projectId, version]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key.toLowerCase() === "n" && canEdit) {
+        e.preventDefault();
+        const btn = [...document.querySelectorAll("button")].find((b) =>
+          b.textContent?.includes("Нова задача"),
+        );
+        btn?.click();
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const ids = issues.map((i) => i.id);
+        if (!ids.length) return;
+        const idx = Math.max(0, ids.indexOf(selectedId || ids[0]!));
+        const next = e.key === "ArrowDown" ? ids[Math.min(ids.length - 1, idx + 1)] : ids[Math.max(0, idx - 1)];
+        setSelectedId(next || null);
+      }
+      if (e.key.toLowerCase() === "e" && selectedId) openIssue(selectedId);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canEdit, issues, selectedId, openIssue]);
+
+  function onQuick(id: string, patch: Record<string, string>) {
+    const snapshot = issues;
+    if (patch.statusId) {
+      setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, status_id: patch.statusId } : i)));
+    }
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("issueId", id);
+      for (const [k, v] of Object.entries(patch)) fd.set(k, v);
+      const res = await updateIssueAction(fd);
+      if (res && "error" in res && res.error) {
+        setIssues(snapshot);
+        toast.push(res.error, "error");
+      } else toast.push("Збережено");
+    });
+  }
 
   function onDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id));
@@ -497,6 +592,7 @@ function KanbanBoardInner({
         setIssues(snapshot);
         setVersion((v) => v - 1);
         setStale(true);
+        toast.push(res.error, "error");
       }
     });
   }
@@ -522,8 +618,10 @@ function KanbanBoardInner({
       const res = await createIssueAction(fd);
       if (res && "error" in res && res.error) {
         setIssues((prev) => prev.filter((i) => i.id !== tempId));
+        toast.push(res.error, "error");
         return;
       }
+      toast.push("Задачу створено");
       if (res && "id" in res && res.id) {
         setIssues((prev) =>
           prev.map((i) =>
@@ -614,6 +712,8 @@ function KanbanBoardInner({
                       canEdit={canEdit}
                       onQuickAdd={onQuickAdd}
                       onOpen={openIssue}
+                      onQuick={onQuick}
+                      allStatuses={statuses}
                     />
                   ))}
                 </div>

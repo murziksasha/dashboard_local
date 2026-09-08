@@ -86,7 +86,7 @@ export function UserRowActions({
               id={`pwd-${userId}`}
               name="password"
               type="password"
-              minLength={6}
+              minLength={8}
               required
             />
           </div>

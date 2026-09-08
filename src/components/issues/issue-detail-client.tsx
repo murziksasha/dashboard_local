@@ -23,14 +23,18 @@ import {
   WorklogsPanel,
   type CommentRow,
 } from "@/components/issues/issue-side-panels";
+import { FileDropzone } from "@/components/issues/file-dropzone";
+import { MarkdownEditor } from "@/components/issues/markdown-editor";
+import { PresenceAvatars } from "@/components/presence-avatars";
 import { Markdown } from "@/components/markdown";
+import { useToast } from "@/components/ui/toast";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Tabs } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+
 import { formatActivity } from "@/lib/activity-format";
 import { ISSUE_TYPE_LABELS, PRIORITY_LABELS } from "@/lib/types";
 import { formatDuration } from "@/lib/utils";
@@ -109,13 +113,15 @@ export function IssueDetailClient(props: {
   onDeleted?: () => void;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const { issue } = props;
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const [activityFilter, setActivityFilter] = useState<"all" | "comment" | "status" | "attachment">("all");
   const [title, setTitle] = useState(issue.title);
   const [desc, setDesc] = useState(issue.description || "");
   const [savedDesc, setSavedDesc] = useState(issue.description || "");
-  const [descTab, setDescTab] = useState<"view" | "edit">("view");
+  const [descTab, setDescTab] = useState<"view" | "edit" | "split">("view");
   const [assigneeIds, setAssigneeIds] = useState(props.assigneeIds);
   const [labels, setLabels] = useState(props.labels);
   const [watching, setWatching] = useState(props.watching);
@@ -152,6 +158,7 @@ export function IssueDetailClient(props: {
     startTransition(async () => {
       const res = await updateIssueAction(fd);
       setMsg(res?.error || "Збережено");
+      toast.push(res?.error || "Збережено", res?.error ? "error" : "ok");
     });
   }
 
@@ -164,16 +171,19 @@ export function IssueDetailClient(props: {
   return (
     <div className={props.compact ? "space-y-4" : "grid gap-4 lg:grid-cols-[1.4fr_0.8fr]"}>
       <div className="space-y-4">
-        <div className="space-y-2">
-          <input
-            value={title}
-            disabled={!props.canEdit}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={() => {
-              if (title.trim() && title !== issue.title) patch({ title: title.trim() });
-            }}
-            className="w-full bg-transparent text-xl font-bold leading-tight outline-none focus:ring-0 disabled:opacity-70"
-          />
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-2">
+            <input
+              value={title}
+              disabled={!props.canEdit}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => {
+                if (title.trim() && title !== issue.title) patch({ title: title.trim() });
+              }}
+              className="w-full bg-transparent text-xl font-bold leading-tight outline-none focus:ring-0 disabled:opacity-70"
+            />
+          </div>
+          <PresenceAvatars projectId={issue.project_id} issueId={issue.id} />
         </div>
 
         <div className="space-y-2 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -182,22 +192,23 @@ export function IssueDetailClient(props: {
             {props.canEdit ? (
               <Tabs
                 value={descTab}
-                onChange={(v) => setDescTab(v as "view" | "edit")}
+                onChange={(v) => setDescTab(v as "view" | "edit" | "split")}
                 items={[
                   { id: "view", label: "Перегляд" },
                   { id: "edit", label: "Редагувати" },
+                  { id: "split", label: "Split" },
                 ]}
               />
             ) : null}
           </div>
-          {descTab === "edit" && props.canEdit ? (
+          {(descTab === "edit" || descTab === "split") && props.canEdit ? (
             <div className="space-y-2">
               {dirty ? (
                 <p className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                   Незбережені зміни в описі
                 </p>
               ) : null}
-              <Textarea value={desc} rows={8} onChange={(e) => setDesc(e.target.value)} />
+              <MarkdownEditor value={desc} onChange={setDesc} rows={8} split={descTab === "split"} />
               <Button type="button" size="sm" onClick={saveDescription} disabled={pending}>
                 Зберегти опис
               </Button>
@@ -210,6 +221,23 @@ export function IssueDetailClient(props: {
         {subtasks.length ? (
           <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <h3 className="mb-2 font-semibold">Підзадачі</h3>
+            {(() => {
+              const done = subtasks.filter((s) => /done|готово|заверш/i.test(s.status_name)).length;
+              const pct = Math.round((done / subtasks.length) * 100);
+              return (
+                <div className="mb-2">
+                  <div className="mb-1 flex justify-between text-[11px] text-zinc-500">
+                    <span>
+                      {done}/{subtasks.length}
+                    </span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })()}
             <div className="space-y-1">
               {subtasks.map((s) => (
                 <Link
@@ -250,6 +278,7 @@ export function IssueDetailClient(props: {
                   if (res && "comment" in res && res.comment) {
                     setComments((prev) => [...prev, res.comment]);
                     setCommentDraft("");
+                    toast.push("Коментар додано");
                   }
                 });
               }}
@@ -279,7 +308,26 @@ export function IssueDetailClient(props: {
             </button>
             {activityOpen ? (
               <div className="mt-2 space-y-1">
-                {props.activity.map((a) => (
+                <div className="mb-2 flex flex-wrap gap-1">
+                  {(["all", "comment", "status", "attachment"] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      className={`rounded-full px-2 py-0.5 text-[11px] ${activityFilter === f ? "bg-sky-600 text-white" : "bg-zinc-100 dark:bg-zinc-800"}`}
+                      onClick={() => setActivityFilter(f)}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+                {props.activity
+                  .filter((a) => {
+                    if (activityFilter === "all") return true;
+                    if (activityFilter === "comment") return a.action.startsWith("comment");
+                    if (activityFilter === "status") return a.action.includes("moved") || a.action.includes("updated");
+                    return a.action.includes("attachment");
+                  })
+                  .map((a) => (
                   <p key={a.id} className="text-xs text-zinc-500">
                     {formatActivity(a.action, a.name, a.payload_json, issue.key)}
                   </p>
@@ -570,27 +618,26 @@ export function IssueDetailClient(props: {
             onChange={setAttachments}
           />
           {props.canEdit ? (
-            <form
-              className="space-y-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const form = e.currentTarget;
-                const fd = new FormData(form);
-                fd.set("issueId", issue.id);
+            <FileDropzone
+              disabled={pending}
+              onFiles={(files) => {
                 startTransition(async () => {
-                  const res = await uploadAttachmentAction(fd);
-                  if (res && "attachment" in res && res.attachment) {
-                    setAttachments((prev) => [res.attachment, ...prev]);
-                    form.reset();
-                  } else if (res && "error" in res) setMsg(res.error ?? "Помилка");
+                  for (const file of files) {
+                    const fd = new FormData();
+                    fd.set("issueId", issue.id);
+                    fd.set("file", file);
+                    const res = await uploadAttachmentAction(fd);
+                    if (res && "attachment" in res && res.attachment) {
+                      setAttachments((prev) => [res.attachment, ...prev]);
+                      toast.push("Файл додано");
+                    } else if (res && "error" in res) {
+                      setMsg(res.error ?? "Помилка");
+                      toast.push(res.error || "Помилка", "error");
+                    }
+                  }
                 });
               }}
-            >
-              <Input name="file" type="file" required />
-              <Button type="submit" size="sm">
-                Завантажити
-              </Button>
-            </form>
+            />
           ) : null}
         </div>
 
