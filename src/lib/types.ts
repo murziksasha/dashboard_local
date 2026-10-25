@@ -83,6 +83,7 @@ export interface IssueFilter {
   sprintId?: string | "backlog" | "any";
   epicId?: string;
   due?: "overdue" | "week" | "none";
+  onlyBlocked?: boolean;
   sort?: "rank" | "key" | "updated" | "created" | "due" | "priority";
   dir?: "asc" | "desc";
   limit?: number;

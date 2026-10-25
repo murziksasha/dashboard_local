@@ -21,6 +21,7 @@ import { createId } from "@/lib/id";
 import { isLdapEnabled, ldapAuthenticate } from "@/lib/ldap";
 import { clientIpFromHeaders, userAgentFromHeaders } from "@/lib/request-ip";
 import { passwordPolicyError } from "@/lib/password-policy";
+import { isLeadOrAdmin } from "@/lib/permissions";
 import { seedDemo } from "@/lib/seed";
 import type { SessionUser } from "@/lib/types";
 import { LoginInput, parseWith, SetupInput } from "@/lib/validation";
@@ -128,17 +129,30 @@ export async function loginAction(formData: FormData) {
 
   const local = get<{
     id: string;
+    login: string;
+    name: string;
+    email: string | null;
+    global_role: "admin" | "user";
     password_hash: string;
     active: number;
   }>(
-    `SELECT id, password_hash, active FROM users WHERE login = ? COLLATE NOCASE`,
+    `SELECT id, login, name, email, global_role, password_hash, active FROM users WHERE login = ? COLLATE NOCASE`,
     [login],
   );
 
   if (local?.active && verifyPassword(password, local.password_hash)) {
     logAudit({ action: "login.ok", userId: local.id, login, ip, userAgent, detail: "local" });
     await createSession(local.id);
-    redirect("/dashboard");
+    const dest = isLeadOrAdmin({
+      id: local.id,
+      login: local.login,
+      name: local.name,
+      email: local.email,
+      global_role: local.global_role,
+    })
+      ? "/dashboard"
+      : "/my-work";
+    redirect(dest);
   }
 
   if (isLdapEnabled()) {
@@ -148,7 +162,13 @@ export async function loginAction(formData: FormData) {
         const userId = await ensureLdapUser(profile);
         logAudit({ action: "login.ok", userId, login, ip, userAgent, detail: "ldap" });
         await createSession(userId);
-        redirect("/dashboard");
+        const ldapUser = get<SessionUser>(
+          `SELECT id, login, name, email, global_role FROM users WHERE id = ?`,
+          [userId],
+        );
+        const dest =
+          ldapUser && isLeadOrAdmin(ldapUser) ? "/dashboard" : "/my-work";
+        redirect(dest);
       } catch {
         logAudit({ action: "login.fail", login, ip, userAgent, detail: "disabled" });
         return { error: "Обліковий запис вимкнено." };

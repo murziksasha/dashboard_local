@@ -31,6 +31,7 @@ export async function markNotificationReadAction(id: string) {
     [nowIso(), id, user.id],
   );
   revalidatePath("/dashboard");
+  revalidatePath("/my-work");
   return { ok: true };
 }
 
@@ -41,5 +42,6 @@ export async function markAllNotificationsReadAction() {
     [nowIso(), user.id],
   );
   revalidatePath("/dashboard");
+  revalidatePath("/my-work");
   return { ok: true };
 }

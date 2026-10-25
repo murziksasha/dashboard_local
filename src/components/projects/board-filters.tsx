@@ -19,6 +19,7 @@ export function BoardFilters({
   const assignee = sp.get("assignee") || "";
   const due = sp.get("due") || "";
   const type = sp.get("type") || "";
+  const blocked = sp.get("blocked") === "1" || sp.get("blocked") === "true";
 
   useEffect(() => {
     try {
@@ -67,6 +68,9 @@ export function BoardFilters({
       </Link>
       <Link href={href({ type: type === "bug" ? null : "bug" })} className={chip(type === "bug")}>
         Баги
+      </Link>
+      <Link href={href({ blocked: blocked ? null : "1" })} className={chip(blocked)}>
+        Заблоковані
       </Link>
     </div>
   );
