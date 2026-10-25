@@ -24,6 +24,12 @@ export function allowedHosts(requestUrl: string, envUrl?: string | null): Set<st
   }
   hosts.add("localhost:3000");
   hosts.add("127.0.0.1:3000");
+  hosts.add("localhost:3003");
+  hosts.add("127.0.0.1:3003");
+  if (process.env.PORT) {
+    hosts.add(`localhost:${process.env.PORT}`);
+    hosts.add(`127.0.0.1:${process.env.PORT}`);
+  }
   return hosts;
 }
 
