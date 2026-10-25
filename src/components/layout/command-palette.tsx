@@ -143,10 +143,13 @@ export function CommandPalette() {
             <kbd>c</kbd> / <kbd>n</kbd> — нова задача (на екрані проєкту)
           </li>
           <li>
-            <kbd>↑</kbd>/<kbd>↓</kbd> — навігація картками на дошці
+            <kbd>↑</kbd>/<kbd>↓</kbd> або <kbd>j</kbd>/<kbd>k</kbd> — навігація на дошці та «Моя робота»
           </li>
           <li>
-            <kbd>e</kbd> — відкрити вибрану задачу
+            <kbd>e</kbd> / <kbd>Enter</kbd> — відкрити вибрану задачу
+          </li>
+          <li>
+            <kbd>l</kbd> — лог часу (на «Моя робота»)
           </li>
           <li>
             <kbd>Esc</kbd> — закрити панель

@@ -37,11 +37,14 @@ export default async function ProjectListPage({
   const page = Math.max(1, Number(sp.page || 1) || 1);
   const pageSize = 50;
 
+  const blocked = sp.blocked === "1" || sp.blocked === "true";
+
   const filter: IssueFilter = {
     q: q || undefined,
     types: type && type in ISSUE_TYPE_LABELS ? [type as IssueType] : undefined,
     statusIds: statusId ? [statusId] : undefined,
     assigneeIds: assignee ? [assignee] : undefined,
+    onlyBlocked: blocked || undefined,
     sort,
     dir,
     limit: pageSize,

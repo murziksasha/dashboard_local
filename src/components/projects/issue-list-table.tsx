@@ -8,7 +8,7 @@ import { ListBulkBar, DeleteFilterButton } from "@/components/projects/list-bulk
 import { SaveFilterForm } from "@/components/projects/save-filter-form";
 import { Badge } from "@/components/ui/badge";
 import { ISSUE_TYPE_LABELS, PRIORITY_LABELS, type IssueType, type Priority } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 type Issue = {
   id: string;
@@ -19,6 +19,9 @@ type Issue = {
   status_name?: string;
   assignee_name?: string | null;
   due_date: string | null;
+  open_blockers_count?: number;
+  subtasks_done?: number;
+  subtasks_total?: number;
 };
 
 export function IssueListTable({
@@ -177,13 +180,36 @@ export function IssueListTable({
                   </Link>
                 </td>
                 <td className="px-3 py-2">
-                  <button
-                    type="button"
-                    className="text-left hover:underline"
-                    onClick={() => openIssue(issue.id)}
-                  >
-                    {issue.title}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="text-left font-medium hover:underline"
+                      onClick={() => openIssue(issue.id)}
+                    >
+                      {issue.title}
+                    </button>
+                    {Number(issue.open_blockers_count) > 0 ? (
+                      <span
+                        className="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300"
+                        title={`Заблоковано іншими задачами: ${issue.open_blockers_count}`}
+                      >
+                        Заблоковано
+                      </span>
+                    ) : null}
+                    {Number(issue.subtasks_total) > 0 ? (
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
+                          issue.subtasks_done === issue.subtasks_total
+                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+                            : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+                        )}
+                        title={`Підзадачі: ${issue.subtasks_done ?? 0}/${issue.subtasks_total}`}
+                      >
+                        {issue.subtasks_done ?? 0}/{issue.subtasks_total}
+                      </span>
+                    ) : null}
+                  </div>
                 </td>
                 <td className="px-3 py-2">{ISSUE_TYPE_LABELS[issue.type]}</td>
                 <td className="px-3 py-2">{issue.status_name}</td>

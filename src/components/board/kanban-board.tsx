@@ -45,6 +45,9 @@ export type BoardIssue = {
   labels?: string | null;
   story_points?: number | null;
   due_date?: string | null;
+  open_blockers_count?: number;
+  subtasks_done?: number;
+  subtasks_total?: number;
 };
 
 export type BoardStatus = {
@@ -132,17 +135,27 @@ function IssueCard({
           />
           {issue.key}
         </span>
-        <Badge
-          tone={
-            issue.priority === "highest" || issue.priority === "high"
-              ? "rose"
-              : issue.priority === "medium"
-                ? "amber"
-                : "default"
-          }
-        >
-          {PRIORITY_LABELS[issue.priority]}
-        </Badge>
+        <div className="flex items-center gap-1">
+          {Number(issue.open_blockers_count) > 0 ? (
+            <span
+              className="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300"
+              title={`Заблоковано іншими задачами: ${issue.open_blockers_count}`}
+            >
+              Заблоковано
+            </span>
+          ) : null}
+          <Badge
+            tone={
+              issue.priority === "highest" || issue.priority === "high"
+                ? "rose"
+                : issue.priority === "medium"
+                  ? "amber"
+                  : "default"
+            }
+          >
+            {PRIORITY_LABELS[issue.priority]}
+          </Badge>
+        </div>
       </div>
       <p className="line-clamp-2 text-sm font-medium leading-snug">{issue.title}</p>
       {canEdit && onQuick ? (
@@ -183,6 +196,19 @@ function IssueCard({
       ) : null}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
         <span className="uppercase">{issue.type}</span>
+        {Number(issue.subtasks_total) > 0 ? (
+          <span
+            className={cn(
+              "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
+              issue.subtasks_done === issue.subtasks_total
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+                : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+            )}
+            title={`Підзадачі: ${issue.subtasks_done ?? 0}/${issue.subtasks_total}`}
+          >
+            {issue.subtasks_done ?? 0}/{issue.subtasks_total}
+          </span>
+        ) : null}
         {issue.story_points != null ? <span>{issue.story_points} SP</span> : null}
         {issue.due_date ? (
           <span className={dueClass(issue.due_date)}>{issue.due_date}</span>
@@ -421,6 +447,7 @@ export function KanbanBoard(props: {
   boardVersion: number;
   canEdit: boolean;
   defaultSprintId?: string;
+  epicProgressMap?: Record<string, { doneSp: number; totalSp: number; doneCount?: number; totalCount?: number }>;
 }) {
   return (
     <Suspense fallback={<BoardSkeleton />}>
@@ -436,6 +463,7 @@ function KanbanBoardInner({
   boardVersion,
   canEdit,
   defaultSprintId,
+  epicProgressMap,
 }: {
   projectId: string;
   initialStatuses: BoardStatus[];
@@ -443,6 +471,7 @@ function KanbanBoardInner({
   boardVersion: number;
   canEdit: boolean;
   defaultSprintId?: string;
+  epicProgressMap?: Record<string, { doneSp: number; totalSp: number; doneCount?: number; totalCount?: number }>;
 }) {
   const router = useRouter();
   const openIssue = useIssueDrawer();
@@ -693,9 +722,30 @@ function KanbanBoardInner({
             {lanes.map((lane) => (
               <div key={lane.id} className="space-y-2">
                 {lane.title ? (
-                  <h3 className="sticky left-0 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
-                    {lane.title}{" "}
+                  <h3 className="sticky left-0 flex flex-wrap items-center gap-2 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+                    <span>{lane.title}</span>
                     <span className="font-normal text-zinc-400">({lane.issues.length})</span>
+                    {swimlane === "epic" && lane.id !== "none" ? (() => {
+                      const ep = epicProgressMap?.[lane.id];
+                      const doneSp = ep
+                        ? ep.doneSp
+                        : lane.issues
+                            .filter((i) => statuses.find((s) => s.id === i.status_id)?.category === "done")
+                            .reduce((acc, i) => acc + (i.story_points || 0), 0);
+                      const totalSp = ep
+                        ? ep.totalSp
+                        : lane.issues.reduce((acc, i) => acc + (i.story_points || 0), 0);
+                      return (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                          <span>{doneSp} / {totalSp} SP</span>
+                          {totalSp > 0 ? (
+                            <span className="text-[10px] text-zinc-400">
+                              ({Math.round((doneSp / totalSp) * 100)}%)
+                            </span>
+                          ) : null}
+                        </span>
+                      );
+                    })() : null}
                   </h3>
                 ) : null}
                 <div

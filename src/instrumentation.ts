@@ -1,4 +1,5 @@
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "edge") return;
-  await import(/* webpackIgnore: true */ "./instrumentation.node");
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    await import("./instrumentation.node");
+  }
 }

@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSessionUser, isSetupComplete } from "@/lib/auth";
+import { isLeadOrAdmin } from "@/lib/permissions";
 
 export default async function HomePage() {
   if (!isSetupComplete()) redirect("/setup");
   const user = await getSessionUser();
-  redirect(user ? "/dashboard" : "/login");
+  if (!user) redirect("/login");
+  redirect(isLeadOrAdmin(user) ? "/dashboard" : "/my-work");
 }

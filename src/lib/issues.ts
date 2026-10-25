@@ -26,6 +26,9 @@ export type IssueRow = Issue & {
   assignee_names?: string | null;
   reporter_name?: string | null;
   labels?: string;
+  open_blockers_count?: number;
+  subtasks_done?: number;
+  subtasks_total?: number;
 };
 
 export type BoardIssueRow = {
@@ -52,6 +55,9 @@ export type BoardIssueRow = {
   status_name?: string;
   status_category?: string;
   labels?: string;
+  open_blockers_count?: number;
+  subtasks_done?: number;
+  subtasks_total?: number;
 };
 
 export type EpicRef = { id: string; key: string; title: string };
@@ -110,6 +116,46 @@ export function listEpics(projectId: string): EpicRef[] {
   );
 }
 
+export type EpicProgress = {
+  doneSp: number;
+  totalSp: number;
+  doneCount: number;
+  totalCount: number;
+};
+
+export function getEpicProgressMap(projectId: string): Record<string, EpicProgress> {
+  const rows = all<{
+    epic_id: string;
+    done_sp: number | null;
+    total_sp: number | null;
+    done_count: number;
+    total_count: number;
+  }>(
+    `SELECT i.epic_id,
+            SUM(CASE WHEN s.category = 'done' THEN COALESCE(i.story_points, 0) ELSE 0 END) as done_sp,
+            SUM(COALESCE(i.story_points, 0)) as total_sp,
+            SUM(CASE WHEN s.category = 'done' THEN 1 ELSE 0 END) as done_count,
+            COUNT(*) as total_count
+     FROM issues i
+     JOIN statuses s ON s.id = i.status_id
+     WHERE i.project_id = ? AND i.deleted_at IS NULL AND i.epic_id IS NOT NULL
+     GROUP BY i.epic_id`,
+    [projectId],
+  );
+  const map: Record<string, EpicProgress> = {};
+  for (const r of rows) {
+    if (r.epic_id) {
+      map[r.epic_id] = {
+        doneSp: Number(r.done_sp) || 0,
+        totalSp: Number(r.total_sp) || 0,
+        doneCount: Number(r.done_count) || 0,
+        totalCount: Number(r.total_count) || 0,
+      };
+    }
+  }
+  return map;
+}
+
 export function listBoardIssues(
   projectId: string,
   opts?: {
@@ -121,6 +167,7 @@ export function listBoardIssues(
     type?: IssueType;
     epicId?: string;
     label?: string;
+    onlyBlocked?: boolean;
   },
 ): BoardIssueRow[] {
   const where = ["i.project_id = ?", "i.deleted_at IS NULL"];
@@ -163,6 +210,14 @@ export function listBoardIssues(
     );
     params.push(opts.label);
   }
+  if (opts?.onlyBlocked) {
+    where.push(`EXISTS (
+      SELECT 1 FROM issue_links l
+      JOIN issues bi ON bi.id = l.from_issue_id
+      JOIN statuses bs ON bs.id = bi.status_id
+      WHERE l.to_issue_id = i.id AND l.link_type = 'blocks' AND bs.category != 'done' AND bi.deleted_at IS NULL
+    )`);
+  }
   const rows = all<BoardIssueRow>(
     `SELECT i.id, i.project_id, i.key, i.type, i.title, i.status_id, i.priority,
             i.assignee_id, i.reporter_id, i.parent_id, i.epic_id, i.sprint_id,
@@ -170,7 +225,19 @@ export function listBoardIssues(
             s.name as status_name, s.category as status_category,
             au.name as assignee_name,
             (SELECT GROUP_CONCAT(il.label, ', ') FROM issue_labels il WHERE il.issue_id = i.id) as labels,
-            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names
+            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names,
+            (SELECT COUNT(*) FROM issue_links l
+             JOIN issues bi ON bi.id = l.from_issue_id
+             JOIN statuses bs ON bs.id = bi.status_id
+             WHERE l.to_issue_id = i.id AND l.link_type = 'blocks' AND bs.category != 'done' AND bi.deleted_at IS NULL
+            ) as open_blockers_count,
+            (SELECT COUNT(*) FROM issues st
+             JOIN statuses sts ON sts.id = st.status_id
+             WHERE st.parent_id = i.id AND sts.category = 'done' AND st.deleted_at IS NULL
+            ) as subtasks_done,
+            (SELECT COUNT(*) FROM issues st
+             WHERE st.parent_id = i.id AND st.deleted_at IS NULL
+            ) as subtasks_total
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id
@@ -222,7 +289,7 @@ export function createIssue(params: {
   priority?: Priority;
   assigneeId?: string | null;
   assigneeIds?: string[];
-  reporterId: string;
+  reporterId?: string | null;
   parentId?: string | null;
   epicId?: string | null;
   sprintId?: string | null;
@@ -269,7 +336,7 @@ export function createIssue(params: {
       statusId,
       params.priority ?? "medium",
       assigneeIds[0] ?? null,
-      params.reporterId,
+      params.reporterId ?? params.actor.id ?? null,
       params.parentId ?? null,
       params.epicId ?? null,
       params.sprintId ?? null,
@@ -293,10 +360,12 @@ export function createIssue(params: {
     ]);
   }
 
-  run(`INSERT OR IGNORE INTO watchers (issue_id, user_id) VALUES (?, ?)`, [
-    id,
-    params.reporterId,
-  ]);
+  if (params.reporterId) {
+    run(`INSERT OR IGNORE INTO watchers (issue_id, user_id) VALUES (?, ?)`, [
+      id,
+      params.reporterId,
+    ]);
+  }
   setIssueAssignees(id, assigneeIds, {
     actorId: params.actor.id,
     issueKey: key,
@@ -413,6 +482,14 @@ export function buildIssueWhere(
     );
     params.push(...filter.labels);
   }
+  if (filter.onlyBlocked) {
+    where.push(`EXISTS (
+      SELECT 1 FROM issue_links l
+      JOIN issues bi ON bi.id = l.from_issue_id
+      JOIN statuses bs ON bs.id = bi.status_id
+      WHERE l.to_issue_id = i.id AND l.link_type = 'blocks' AND bs.category != 'done' AND bi.deleted_at IS NULL
+    )`);
+  }
   return { where: where.join(" AND "), params };
 }
 
@@ -438,7 +515,19 @@ export function listIssues(
   let sql = `SELECT i.*, s.name as status_name, s.category as status_category,
             au.name as assignee_name, ru.name as reporter_name,
             (SELECT GROUP_CONCAT(il.label, ', ') FROM issue_labels il WHERE il.issue_id = i.id) as labels,
-            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names
+            (SELECT GROUP_CONCAT(u.name, ', ') FROM issue_assignees ia JOIN users u ON u.id = ia.user_id WHERE ia.issue_id = i.id) as assignee_names,
+            (SELECT COUNT(*) FROM issue_links l
+             JOIN issues bi ON bi.id = l.from_issue_id
+             JOIN statuses bs ON bs.id = bi.status_id
+             WHERE l.to_issue_id = i.id AND l.link_type = 'blocks' AND bs.category != 'done' AND bi.deleted_at IS NULL
+            ) as open_blockers_count,
+            (SELECT COUNT(*) FROM issues st
+             JOIN statuses sts ON sts.id = st.status_id
+             WHERE st.parent_id = i.id AND sts.category = 'done' AND st.deleted_at IS NULL
+            ) as subtasks_done,
+            (SELECT COUNT(*) FROM issues st
+             WHERE st.parent_id = i.id AND st.deleted_at IS NULL
+            ) as subtasks_total
      FROM issues i
      JOIN statuses s ON s.id = i.status_id
      LEFT JOIN users au ON au.id = i.assignee_id

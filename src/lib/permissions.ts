@@ -35,6 +35,24 @@ export function canAccessProject(user: SessionUser, projectId: string): boolean 
   return getProjectRole(user, projectId) !== null;
 }
 
+export function isLeadOrAdmin(user: SessionUser): boolean {
+  if (user.global_role === "admin") return true;
+  const direct = get<{ user_id: string }>(
+    `SELECT user_id FROM project_members WHERE user_id = ? AND role = 'lead' LIMIT 1`,
+    [user.id],
+  );
+  if (direct) return true;
+  const viaTeam = get<{ role: string }>(
+    `SELECT pt.role
+     FROM project_teams pt
+     JOIN team_members tm ON tm.team_id = pt.team_id
+     WHERE tm.user_id = ? AND pt.role = 'lead'
+     LIMIT 1`,
+    [user.id],
+  );
+  return !!viaTeam;
+}
+
 export function hasMinRole(
   user: SessionUser,
   projectId: string,

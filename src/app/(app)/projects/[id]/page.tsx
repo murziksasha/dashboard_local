@@ -6,7 +6,7 @@ import { BoardFilters } from "@/components/projects/board-filters";
 import { ProjectNav } from "@/components/projects/project-nav";
 import { Badge } from "@/components/ui/badge";
 import { requireUser } from "@/lib/auth";
-import { listBoardIssues, listEpics } from "@/lib/issues";
+import { getEpicProgressMap, listBoardIssues, listEpics } from "@/lib/issues";
 import { listIssueTemplates, seedBuiltinTemplates } from "@/lib/issue-templates";
 import { listProjectLabels } from "@/lib/issue-workspace";
 import { canComment } from "@/lib/permissions";
@@ -42,6 +42,7 @@ export default async function ProjectBoardPage({
   const type = typeof sp.type === "string" && sp.type ? sp.type : undefined;
   const epicId = typeof sp.epic === "string" ? sp.epic : undefined;
   const label = typeof sp.label === "string" ? sp.label : undefined;
+  const onlyBlocked = sp.blocked === "1" || sp.blocked === "true";
 
   const boardIssues = listBoardIssues(id, {
     sprintId: useSprint ? activeSprint!.id : undefined,
@@ -52,7 +53,9 @@ export default async function ProjectBoardPage({
     type: type as "bug" | "task" | "story" | "epic" | "subtask" | undefined,
     epicId,
     label,
+    onlyBlocked,
   });
+  const epicProgressMap = getEpicProgressMap(id);
 
   return (
     <div className="space-y-4">
@@ -127,11 +130,15 @@ export default async function ProjectBoardPage({
             labels: i.labels,
             story_points: i.story_points,
             due_date: i.due_date,
+            open_blockers_count: i.open_blockers_count,
+            subtasks_done: i.subtasks_done,
+            subtasks_total: i.subtasks_total,
           };
         })}
         boardVersion={ctx.project.board_version}
         canEdit={ctx.canEdit}
         defaultSprintId={activeSprint?.id}
+        epicProgressMap={epicProgressMap}
       />
       <IssueDrawerHost
         projectId={id}

@@ -12,12 +12,16 @@ import { logActivity } from "@/lib/activity";
 import { bumpBoardVersion } from "@/lib/projects";
 import {
   assertMinRole,
+  canAccessProject,
   canComment,
   canEditIssues,
   canManageProject,
 } from "@/lib/permissions";
 import { parseAssigneeIds } from "@/lib/assignees";
-import { loadIssueWorkspace } from "@/lib/issue-workspace";
+import { listProjectLabels, loadIssueWorkspace } from "@/lib/issue-workspace";
+import { loadProjectPeople, loadProjectShell } from "@/lib/project-page";
+import { listEpics } from "@/lib/issues";
+import { listProjectSprints } from "@/lib/projects";
 import { getUploadsDir } from "@/lib/paths";
 import { hardDeleteIssue } from "@/lib/purge";
 import { snapshotProjectSprints } from "@/lib/reports";
@@ -216,6 +220,44 @@ export async function loadIssueWorkspaceAction(projectId: string, issueId: strin
   const data = loadIssueWorkspace(user, projectId, issueId);
   if (!data) return { error: "Не знайдено." as const };
   return { ok: true as const, data };
+}
+
+export async function loadGlobalIssueDrawerAction(issueId: string) {
+  const user = await requireUser();
+  const issueRow = get<{ project_id: string }>(
+    `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+    [issueId],
+  );
+  if (!issueRow) return { error: "Не знайдено." as const };
+  if (!canAccessProject(user, issueRow.project_id)) {
+    return { error: "Немає доступу." as const };
+  }
+  const data = loadIssueWorkspace(user, issueRow.project_id, issueId);
+  if (!data) return { error: "Не знайдено." as const };
+  const ctx = loadProjectShell(user, issueRow.project_id);
+  const { users } = loadProjectPeople(issueRow.project_id);
+  const sprints = listProjectSprints(issueRow.project_id);
+  const epics = listEpics(issueRow.project_id);
+  const labelSuggestions = listProjectLabels(issueRow.project_id);
+
+  return {
+    ok: true as const,
+    data,
+    projectContext: {
+      projectId: ctx.project.id,
+      projectKey: ctx.project.key,
+      statuses: ctx.statuses,
+      users,
+      sprints,
+      epics,
+      labelSuggestions,
+      canEdit: ctx.canEdit,
+      canComment: canComment(user, ctx.project.id),
+      currentUserId: user.id,
+      currentUserName: user.name,
+      isAdmin: user.global_role === "admin",
+    },
+  };
 }
 
 export async function toggleWatcherAction(issueId: string) {

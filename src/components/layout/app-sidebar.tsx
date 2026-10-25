@@ -10,6 +10,7 @@ import {
   UsersRound,
   DatabaseBackup,
   ClipboardList,
+  CheckSquare,
   Menu,
   X,
   ChevronDown,
@@ -18,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 const links = [
+  { href: "/my-work", label: "Моя робота", icon: CheckSquare },
   { href: "/dashboard", label: "Дашборд", icon: LayoutDashboard },
   { href: "/projects", label: "Проєкти", icon: FolderKanban },
   { href: "/teams", label: "Команди", icon: UsersRound },
