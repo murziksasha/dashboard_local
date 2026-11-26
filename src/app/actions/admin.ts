@@ -53,6 +53,9 @@ export async function toggleUserActiveAction(userId: string, active: boolean) {
     nowIso(),
     userId,
   ]);
+  if (!active) {
+    run(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+  }
   revalidatePath("/admin/users");
   return { ok: true as const };
 }
@@ -68,6 +71,7 @@ export async function resetPasswordAction(formData: FormData) {
     nowIso(),
     userId,
   ]);
+  run(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
   revalidatePath("/admin/users");
   return { ok: true as const };
 }

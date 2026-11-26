@@ -4,17 +4,33 @@ export type ActionOk<T extends Record<string, unknown> = Record<string, never>> 
 export type ActionErr = { error: string };
 export type ActionResult<T extends Record<string, unknown> = Record<string, never>> = ActionOk<T> | ActionErr;
 
-export async function withAction<T extends Record<string, unknown>>(
+export async function withAction<T>(
   name: string,
-  fn: () => Promise<ActionResult<T>> | ActionResult<T>,
-): Promise<ActionResult<T>> {
+  fn: () => Promise<T> | T,
+): Promise<T | ActionErr> {
   try {
     return await fn();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg === "UNAUTHORIZED") return { error: "Потрібен вхід." };
     if (msg === "FORBIDDEN") return { error: "Немає прав." };
+    if (msg === "NOT_FOUND") return { error: "Не знайдено." };
+    if (msg === "PROJECT_NOT_FOUND") return { error: "Проєкт не знайдено." };
+    const safePrefixes = [
+      "Ліміт WIP",
+      "Workflow «",
+      "Уже є активний спринт",
+      "Неможливо видалити статус",
+      "Має залишитись хоча б один статус",
+      "Назва ",
+      "Заголовок ",
+      "Ключ:",
+      "Пароль",
+    ];
+    if (safePrefixes.some((p) => msg.startsWith(p))) {
+      return { error: msg };
+    }
     log.caught(`action.${name}`, e);
-    return { error: msg.startsWith("Ліміт WIP") ? msg : "Не вдалося виконати дію." };
+    return { error: "Не вдалося виконати дію." };
   }
 }

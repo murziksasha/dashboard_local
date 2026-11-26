@@ -1,8 +1,10 @@
 import fs from "fs";
 import path from "path";
+import { DatabaseSync } from "node:sqlite";
 import { getBackupsDir, getDbPath, getUploadsDir } from "./paths";
 import { all, getDb, resetDbConnection, settingGet, settingSet } from "./db";
 import { toCsv } from "./csv";
+import { resetFtsCache } from "./search";
 import { copyDirIfExists, dirSizeBytes, uploadsSnapshotDir } from "./uploads";
 
 function pruneBackupPair(backupsDir: string, dbName: string) {
@@ -36,11 +38,8 @@ export function createBackup(label = "manual"): string {
     if (!path.isAbsolute(target) || target.includes("\0") || /[\r\n]/.test(target)) {
       throw new Error("INVALID_BACKUP_PATH");
     }
-    const escaped = target.replace(/'/g, "''");
-    if (escaped.includes("\\")) {
-      throw new Error("USE_COPY_FALLBACK");
-    }
-    getDb().exec(`VACUUM INTO '${escaped}'`);
+    const normalized = target.replace(/\\/g, "/").replace(/'/g, "''");
+    getDb().exec(`VACUUM INTO '${normalized}'`);
   } catch {
     fs.copyFileSync(getDbPath(), target);
   }
@@ -80,15 +79,61 @@ export function listBackups(): Array<{
 export function restoreBackup(filename: string) {
   const src = path.join(getBackupsDir(), path.basename(filename));
   if (!fs.existsSync(src)) throw new Error("BACKUP_NOT_FOUND");
-  getDb().exec("PRAGMA wal_checkpoint(TRUNCATE);");
-  fs.copyFileSync(src, getDbPath());
+  const fd = fs.openSync(src, "r");
+  try {
+    const hdr = Buffer.alloc(16);
+    fs.readSync(fd, hdr, 0, 16, 0);
+    if (!hdr.toString("utf8", 0, 15).startsWith("SQLite format 3")) {
+      throw new Error("INVALID_BACKUP_FILE");
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // Verify SQLite integrity before touching live database
+  const checkDb = new DatabaseSync(src);
+  try {
+    const row = checkDb.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+    if (row?.quick_check !== "ok") {
+      throw new Error("INVALID_BACKUP_FILE");
+    }
+  } finally {
+    checkDb.close();
+  }
+
+  // Automatic safety snapshot before overwriting live DB
+  if (fs.existsSync(getDbPath()) && !path.basename(filename).includes("-pre-restore-")) {
+    try {
+      createBackup("pre-restore");
+    } catch {
+      // do not block restore if pre-restore snapshot fails
+    }
+  }
+
+  try {
+    getDb().exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } catch {
+    // ignore
+  }
+  resetDbConnection();
+
+  const dbPath = getDbPath();
+  for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+    } catch {
+      // ignore
+    }
+  }
+  fs.copyFileSync(src, dbPath);
+
   const snap = path.join(getBackupsDir(), uploadsSnapshotDir(path.basename(filename)));
   if (fs.existsSync(snap)) {
     const dest = getUploadsDir();
     fs.rmSync(dest, { recursive: true, force: true });
     copyDirIfExists(snap, dest);
   }
-  resetDbConnection();
+  resetFtsCache();
 }
 
 export function maybeAutoBackup() {
@@ -97,6 +142,15 @@ export function maybeAutoBackup() {
   if (last) {
     const prev = new Date(last).getTime();
     if (now - prev < 20 * 60 * 60 * 1000) return null; // ~daily
+  }
+  const hourRaw = settingGet("backup_hour");
+  if (hourRaw !== null && hourRaw !== "") {
+    const targetHour = Number(hourRaw);
+    const currentHour = new Date(now).getHours();
+    const overdue = !last || now - new Date(last).getTime() >= 26 * 60 * 60 * 1000;
+    if (Number.isInteger(targetHour) && targetHour >= 0 && targetHour <= 23 && currentHour < targetHour && !overdue) {
+      return null;
+    }
   }
   return createBackup("auto");
 }

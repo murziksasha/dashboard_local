@@ -22,6 +22,7 @@ export type CommentRow = {
   created_at: string;
   name: string;
   author_id: string;
+  reactions?: Array<{ emoji: string; count: number; mine: boolean }>;
 };
 
 export function CommentsPanel({
@@ -81,20 +82,49 @@ export function CommentsPanel({
                   <Markdown content={c.body} />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {REACTION_EMOJI.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      className="rounded px-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                      onClick={() =>
-                        startTransition(async () => {
-                          await toggleReactionAction(c.id, emoji);
-                        })
-                      }
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+                  {REACTION_EMOJI.map((emoji) => {
+                    const existing = c.reactions?.find((r) => r.emoji === emoji);
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs ${
+                          existing?.mine
+                            ? "bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200"
+                            : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        }`}
+                        onClick={() =>
+                          startTransition(async () => {
+                            const res = await toggleReactionAction(c.id, emoji);
+                            if (res && "on" in res) {
+                              onChange(
+                                comments.map((item) => {
+                                  if (item.id !== c.id) return item;
+                                  const list = [...(item.reactions ?? [])];
+                                  const idx = list.findIndex((r) => r.emoji === emoji);
+                                  if (res.on) {
+                                    if (idx >= 0) {
+                                      list[idx] = { emoji, count: list[idx].count + (list[idx].mine ? 0 : 1), mine: true };
+                                    } else {
+                                      list.push({ emoji, count: 1, mine: true });
+                                    }
+                                  } else if (idx >= 0) {
+                                    const nextCount = list[idx].count - (list[idx].mine ? 1 : 0);
+                                    if (nextCount > 0) list[idx] = { emoji, count: nextCount, mine: false };
+                                    else list.splice(idx, 1);
+                                  }
+                                  return { ...item, reactions: list };
+                                }),
+                              );
+                            }
+                          })
+                        }
+                      >
+                        <span>{emoji}</span>
+                        {existing?.count ? <span>{existing.count}</span> : null}
+                      </button>
+                    );
+                  })}
                 </div>
                 {c.author_id === currentUserId || isAdmin ? (
                   <div className="mt-2 flex gap-2">
@@ -107,8 +137,10 @@ export function CommentsPanel({
                       variant="danger"
                       onClick={() =>
                         startTransition(async () => {
-                          await deleteCommentAction(c.id);
-                          onChange(comments.filter((x) => x.id !== c.id));
+                          const res = await deleteCommentAction(c.id);
+                          if (!res || !("error" in res && res.error)) {
+                            onChange(comments.filter((x) => x.id !== c.id));
+                          }
                         })
                       }
                     >
@@ -174,8 +206,10 @@ export function AttachmentsPanel({
                   variant="ghost"
                   onClick={() =>
                     startTransition(async () => {
-                      await deleteAttachmentAction(a.id);
-                      onChange(attachments.filter((x) => x.id !== a.id));
+                      const res = await deleteAttachmentAction(a.id);
+                      if (!res || !("error" in res && res.error)) {
+                        onChange(attachments.filter((x) => x.id !== a.id));
+                      }
                     })
                   }
                 >
@@ -264,8 +298,10 @@ export function LinksPanel({
                 variant="ghost"
                 onClick={() =>
                   startTransition(async () => {
-                    await deleteIssueLinkAction(l.id);
-                    onChange(links.filter((x) => x.id !== l.id));
+                    const res = await deleteIssueLinkAction(l.id);
+                    if (!res || !("error" in res && res.error)) {
+                      onChange(links.filter((x) => x.id !== l.id));
+                    }
                   })
                 }
               >

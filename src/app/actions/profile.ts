@@ -46,6 +46,13 @@ export async function changeOwnPasswordAction(formData: FormData) {
     nowIso(),
     user.id,
   ]);
+  const { cookies } = await import("next/headers");
+  const curSession = (await cookies()).get("dl_session")?.value;
+  if (curSession) {
+    run(`DELETE FROM sessions WHERE user_id = ? AND id != ?`, [user.id, curSession]);
+  } else {
+    run(`DELETE FROM sessions WHERE user_id = ?`, [user.id]);
+  }
   return { ok: true as const };
 }
 

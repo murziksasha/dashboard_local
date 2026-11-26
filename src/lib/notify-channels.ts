@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 import { get, settingGet } from "./db";
-import { loadEnv } from "./env";
+import { loadEnv, publicBaseUrlFromEnv } from "./env";
 import { listPushTokens, sendExpoPush } from "./push";
 import { settingGetSecret } from "./secrets";
 
@@ -17,7 +17,8 @@ export function getNotifyChannelConfig() {
     telegramBotToken: env.TELEGRAM_BOT_TOKEN || settingGetSecret("telegram_bot_token") || "",
     // optional global chat; per-user chat id in settings key telegram_chat_<userId>
     telegramDefaultChat: settingGet("telegram_default_chat") || "",
-    appBaseUrl: settingGet("app_base_url") || "http://localhost:3000",
+    appBaseUrl:
+      settingGet("app_base_url") || publicBaseUrlFromEnv() || "http://localhost:3000",
   };
 }
 
@@ -45,15 +46,22 @@ async function sendTelegram(chatId: string, text: string) {
   const cfg = getNotifyChannelConfig();
   if (!cfg.telegramEnabled || !cfg.telegramBotToken || !chatId) return;
   const url = `https://api.telegram.org/bot${cfg.telegramBotToken}/sendMessage`;
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 8000);
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true,
+      }),
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 export async function dispatchExternalNotification(params: {

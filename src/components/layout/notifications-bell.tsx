@@ -139,7 +139,7 @@ export function NotificationsBell() {
                   onClick={() => {
                     setOpen(false);
                     startTransition(async () => {
-                      await markNotificationReadAction(item.id);
+                      await Promise.all(item.ids.map((id) => markNotificationReadAction(id)));
                       await refresh();
                     });
                   }}

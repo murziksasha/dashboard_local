@@ -33,6 +33,7 @@ yarn-error.log*
 next-env.d.ts
 
 # app data
+/data/.secret
 /data/dashboard.db
 /data/dashboard.db-*
 /data/uploads/**

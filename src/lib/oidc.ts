@@ -1,5 +1,6 @@
 import * as oidc from "openid-client";
 import { settingGet } from "./db";
+import { settingGetSecret } from "./secrets";
 
 export type OidcConfig = {
   enabled: boolean;
@@ -15,7 +16,7 @@ export function getOidcConfig(): OidcConfig {
     enabled: settingGet("oidc_enabled") === "1",
     issuer: settingGet("oidc_issuer") || "",
     clientId: settingGet("oidc_client_id") || "",
-    clientSecret: settingGet("oidc_client_secret") || "",
+    clientSecret: settingGetSecret("oidc_client_secret") || "",
     redirectUri:
       settingGet("oidc_redirect_uri") ||
       "http://localhost:3000/api/auth/oidc/callback",

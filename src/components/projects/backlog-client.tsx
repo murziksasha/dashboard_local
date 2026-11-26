@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useToast } from "@/components/ui/toast";
 import {
   DndContext,
   PointerSensor,
@@ -187,6 +188,15 @@ export function BacklogClient({
   const [, startTransition] = useTransition();
   const openIssue = useIssueDrawer();
   const router = useRouter();
+  const toast = useToast();
+
+  useEffect(() => {
+    setBacklogItems(backlog);
+  }, [backlog]);
+
+  useEffect(() => {
+    setSprintItems(sprintIssues);
+  }, [sprintIssues]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -218,7 +228,12 @@ export function BacklogClient({
       if (from === "sprint") setSprintItems(next);
       else setBacklogItems(next);
       startTransition(async () => {
-        await reorderBacklogAction(next.map((i) => i.id));
+        const res = await reorderBacklogAction(next.map((i) => i.id));
+        if (res && "error" in res && res.error) {
+          if (from === "sprint") setSprintItems(list);
+          else setBacklogItems(list);
+          toast.push(res.error, "error");
+        }
       });
       return;
     }
@@ -228,6 +243,8 @@ export function BacklogClient({
         ? sprintItems.find((i) => i.id === a.id)
         : backlogItems.find((i) => i.id === a.id);
     if (!item) return;
+    const prevSprint = sprintItems;
+    const prevBacklog = backlogItems;
     const nextSprint =
       from === "sprint"
         ? sprintItems.filter((i) => i.id !== item.id)
@@ -239,7 +256,12 @@ export function BacklogClient({
     setSprintItems(nextSprint);
     setBacklogItems(nextBacklog);
     startTransition(async () => {
-      await assignToSprintAction(item.id, from === "backlog" ? active?.id || null : null);
+      const res = await assignToSprintAction(item.id, from === "backlog" ? active?.id || null : null);
+      if (res && "error" in res && res.error) {
+        setSprintItems(prevSprint);
+        setBacklogItems(prevBacklog);
+        toast.push(res.error, "error");
+      }
     });
   }
 
@@ -283,7 +305,23 @@ export function BacklogClient({
               {active.start_date || "?"} → {active.end_date || "?"} · {sprintItems.length} задач · {spSum} SP
             </p>
             {canManage ? (
-              <form className="mt-3 space-y-2" action={completeSprintAction}>
+              <form
+                className="mt-3 space-y-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!window.confirm(`Завершити спринт «${active.name}»?`)) return;
+                  const fd = new FormData(e.currentTarget);
+                  startTransition(async () => {
+                    const res = await completeSprintAction(fd);
+                    if (res && "error" in res && res.error) {
+                      toast.push(res.error, "error");
+                    } else {
+                      toast.push("Спринт завершено");
+                      router.refresh();
+                    }
+                  });
+                }}
+              >
                 <input type="hidden" name="projectId" value={projectId} />
                 <input type="hidden" name="sprintId" value={active.id} />
                 <Label>Незавершені перенести в</Label>

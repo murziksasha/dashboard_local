@@ -54,7 +54,7 @@ export function ProjectNav({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-200 pb-2 dark:border-zinc-800">
+    <div className="no-print flex items-center gap-1 overflow-x-auto border-b border-zinc-200 pb-2 dark:border-zinc-800">
       {primary.map((item) => {
         const active = item.exact
           ? pathname === item.href

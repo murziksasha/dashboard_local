@@ -1,7 +1,8 @@
 import { getIssueAssignees } from "./assignees";
+import { listCommentReactions, type ReactionCount } from "./comment-reactions";
 import { all, get } from "./db";
 import { getIssue, getIssueLabels } from "./issues";
-import { canComment, canEditIssues } from "./permissions";
+import { assertProjectAccess, canComment, canEditIssues } from "./permissions";
 import type { SessionUser } from "./types";
 
 export type IssueComment = {
@@ -10,6 +11,7 @@ export type IssueComment = {
   created_at: string;
   name: string;
   author_id: string;
+  reactions?: ReactionCount[];
 };
 
 export type IssueLinkRow = {
@@ -65,7 +67,7 @@ export function listProjectLabels(projectId: string): string[] {
     `SELECT DISTINCT il.label
      FROM issue_labels il
      JOIN issues i ON i.id = il.issue_id
-     WHERE i.project_id = ?
+     WHERE i.project_id = ? AND i.deleted_at IS NULL
      ORDER BY il.label`,
     [projectId],
   ).map((r) => r.label);
@@ -76,17 +78,26 @@ export function loadIssueWorkspace(
   projectId: string,
   issueId: string,
 ): IssueWorkspacePayload | null {
+  assertProjectAccess(user, projectId);
   const issue = getIssue(issueId);
   if (!issue || issue.project_id !== projectId) return null;
 
-  const comments = all<IssueComment>(
+  const rawComments = all<IssueComment>(
     `SELECT c.id, c.body, c.created_at, c.author_id, u.name
      FROM comments c JOIN users u ON u.id = c.author_id
      WHERE c.issue_id = ? ORDER BY c.created_at ASC`,
     [issueId],
   );
-  const subtasks = all<{ id: string; key: string; title: string; status_name: string }>(
-    `SELECT i.id, i.key, i.title, s.name as status_name
+  const reactionsMap = listCommentReactions(
+    rawComments.map((c) => c.id),
+    user.id,
+  );
+  const comments = rawComments.map((c) => ({
+    ...c,
+    reactions: reactionsMap[c.id] ?? [],
+  }));
+  const subtasks = all<{ id: string; key: string; title: string; status_name: string; status_category?: string }>(
+    `SELECT i.id, i.key, i.title, s.name as status_name, s.category as status_category
      FROM issues i JOIN statuses s ON s.id = i.status_id
      WHERE i.parent_id = ? AND i.deleted_at IS NULL ORDER BY i.rank`,
     [issueId],
@@ -119,7 +130,7 @@ export function loadIssueWorkspace(
     `SELECT l.id, l.link_type, i.key as other_key, i.id as other_id, i.title as other_title
      FROM issue_links l
      JOIN issues i ON i.id = l.to_issue_id
-     WHERE l.from_issue_id = ?
+     WHERE l.from_issue_id = ? AND i.deleted_at IS NULL
      UNION ALL
      SELECT l.id,
             CASE l.link_type
@@ -129,7 +140,7 @@ export function loadIssueWorkspace(
             i.key, i.id, i.title
      FROM issue_links l
      JOIN issues i ON i.id = l.from_issue_id
-     WHERE l.to_issue_id = ?`,
+     WHERE l.to_issue_id = ? AND i.deleted_at IS NULL`,
     [issueId, issueId],
   );
   const worklogs = all<{

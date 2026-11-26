@@ -6,10 +6,12 @@ export function getAppBaseUrl(reqUrl?: string): string {
   const fromSettings = settingGet("app_base_url")?.replace(/\/$/, "");
   if (fromSettings) return fromSettings;
 
-  const env = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(
-    /\/$/,
-    "",
-  );
+  const env = (
+    process.env.APP_URL ||
+    process.env.APP_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    ""
+  ).replace(/\/$/, "");
   if (env) return env;
 
   try {

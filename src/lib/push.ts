@@ -89,6 +89,8 @@ export async function sendExpoPush(params: {
   // Expo accepts batches up to ~100
   for (let i = 0; i < messages.length; i += 100) {
     const chunk = messages.slice(i, i + 100);
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 8000);
     try {
       const res = await fetch(EXPO_PUSH_URL, {
         method: "POST",
@@ -98,6 +100,7 @@ export async function sendExpoPush(params: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(chunk),
+        signal: ac.signal,
       });
       if (!res.ok) continue;
       const json = (await res.json().catch(() => null)) as {
@@ -115,6 +118,8 @@ export async function sendExpoPush(params: {
       });
     } catch {
       // non-fatal
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

@@ -20,12 +20,15 @@ export function MentionTextarea({
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [active, setActive] = useState(0);
+  const [cursor, setCursor] = useState(value.length);
 
   const hint = useMemo(() => {
-    const at = value.lastIndexOf("@");
-    if (at < 0) return { open: false, token: "", at: -1, items: [] as User[] };
-    const token = value.slice(at + 1);
-    if (/\s/.test(token)) return { open: false, token: "", at: -1, items: [] as User[] };
+    const pos = Math.min(cursor, value.length);
+    const before = value.slice(0, pos);
+    const at = before.lastIndexOf("@");
+    if (at < 0) return { open: false, token: "", at: -1, pos, items: [] as User[] };
+    const token = before.slice(at + 1);
+    if (/\s/.test(token)) return { open: false, token: "", at: -1, pos, items: [] as User[] };
     const q = token.toLowerCase();
     const items = users
       .filter(
@@ -35,15 +38,22 @@ export function MentionTextarea({
           (u.login || "").toLowerCase().includes(q),
       )
       .slice(0, 8);
-    return { open: true, token, at, items };
-  }, [value, users]);
+    return { open: true, token, at, pos, items };
+  }, [value, users, cursor]);
 
   function insert(u: User) {
     const handle = u.login || u.name;
-    const next = `${value.slice(0, hint.at)}@${handle} `;
+    const inserted = `@${handle} `;
+    const next = `${value.slice(0, hint.at)}${inserted}${value.slice(hint.pos)}`;
+    const nextPos = hint.at + inserted.length;
     onChange(next);
+    setCursor(nextPos);
     setActive(0);
-    requestAnimationFrame(() => ref.current?.focus());
+    requestAnimationFrame(() => {
+      if (!ref.current) return;
+      ref.current.focus();
+      ref.current.setSelectionRange(nextPos, nextPos);
+    });
   }
 
   return (
@@ -54,7 +64,10 @@ export function MentionTextarea({
         rows={rows}
         placeholder={placeholder}
         required
+        onClick={(e) => setCursor(e.currentTarget.selectionStart ?? value.length)}
+        onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? value.length)}
         onChange={(e) => {
+          setCursor(e.target.selectionStart ?? e.target.value.length);
           onChange(e.target.value);
           setActive(0);
         }}

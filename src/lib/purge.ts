@@ -21,9 +21,11 @@ export function hardDeleteIssue(issueId: string, projectId?: string) {
 }
 
 export function purgeExpiredDeletedIssues() {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const rows = all<{ id: string; project_id: string }>(
     `SELECT id, project_id FROM issues
-     WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 day')`,
+     WHERE deleted_at IS NOT NULL AND deleted_at < ?`,
+    [cutoff],
   );
   for (const row of rows) hardDeleteIssue(row.id, row.project_id);
   return rows.length;

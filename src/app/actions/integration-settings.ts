@@ -10,10 +10,10 @@ export async function updateOidcSettingsAction(formData: FormData) {
   settingSet("oidc_enabled", formData.get("oidc_enabled") === "on" ? "1" : "0");
   settingSet("oidc_issuer", String(formData.get("oidc_issuer") || "").trim());
   settingSet("oidc_client_id", String(formData.get("oidc_client_id") || "").trim());
-  settingSet(
-    "oidc_client_secret",
-    String(formData.get("oidc_client_secret") || "").trim(),
-  );
+  const oidcSecret = String(formData.get("oidc_client_secret") || "").trim();
+  if (oidcSecret && oidcSecret !== "••••••••") {
+    settingSetSecret("oidc_client_secret", oidcSecret);
+  }
   settingSet(
     "oidc_redirect_uri",
     String(formData.get("oidc_redirect_uri") || "").trim() ||

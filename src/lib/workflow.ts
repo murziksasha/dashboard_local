@@ -111,7 +111,8 @@ export function assertTransitionAllowed(params: {
          FROM issue_links l
          JOIN issues bi ON bi.id = l.from_issue_id
          JOIN statuses bs ON bs.id = bi.status_id
-         WHERE l.to_issue_id = ? AND l.link_type = 'blocks' AND bs.category != 'done'`,
+         WHERE l.to_issue_id = ? AND l.link_type = 'blocks'
+           AND bi.deleted_at IS NULL AND bs.category != 'done'`,
         [params.issueId],
       )?.c;
       if (openBlockers && openBlockers > 0) {

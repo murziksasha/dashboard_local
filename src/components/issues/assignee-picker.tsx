@@ -58,7 +58,7 @@ export function AssigneePicker({
         ) : null}
       </div>
       {disabled ? null : (
-        <div className="relative">
+        <div className="group relative">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -69,7 +69,7 @@ export function AssigneePicker({
             <ul
               className={cn(
                 "absolute z-20 mt-1 max-h-40 w-full overflow-auto rounded-md border border-zinc-200 bg-white text-sm shadow dark:border-zinc-700 dark:bg-zinc-900",
-                !q.trim() && "hidden focus-within:block",
+                !q.trim() && "hidden group-focus-within:block",
               )}
             >
               {(q.trim() ? available : available.slice(0, 8)).map((u) => (

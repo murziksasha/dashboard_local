@@ -30,13 +30,27 @@ export function worklogByUser(projectId: string, days = 14): TimeUserRow[] {
   );
 }
 
-export function myWorklogByDay(userId: string, days = 14): TimePoint[] {
+export function myWorklogByDay(userId: string, days = 14, projectId?: string): TimePoint[] {
+  if (projectId) {
+    return all<TimePoint>(
+      `SELECT w.work_date as day, SUM(w.seconds) as seconds
+       FROM worklogs w
+       JOIN issues i ON i.id = w.issue_id
+       WHERE w.user_id = ? AND i.project_id = ? AND i.deleted_at IS NULL
+         AND w.work_date >= date('now', ?)
+       GROUP BY w.work_date
+       ORDER BY w.work_date`,
+      [userId, projectId, `-${days} day`],
+    );
+  }
   return all<TimePoint>(
-    `SELECT work_date as day, SUM(seconds) as seconds
-     FROM worklogs
-     WHERE user_id = ? AND work_date >= date('now', ?)
-     GROUP BY work_date
-     ORDER BY work_date`,
+    `SELECT w.work_date as day, SUM(w.seconds) as seconds
+     FROM worklogs w
+     JOIN issues i ON i.id = w.issue_id
+     WHERE w.user_id = ? AND i.deleted_at IS NULL
+       AND w.work_date >= date('now', ?)
+     GROUP BY w.work_date
+     ORDER BY w.work_date`,
     [userId, `-${days} day`],
   );
 }

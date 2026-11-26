@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getIssueAssignees } from "@/lib/assignees";
 import { getUserFromApiToken } from "@/lib/api-auth";
 import { all } from "@/lib/db";
-import { getIssue, getIssueLabels, moveIssue, updateIssue } from "@/lib/issues";
+import { getIssue, getIssueLabels, updateIssue } from "@/lib/issues";
 import { canAccessProject, canEditIssues } from "@/lib/permissions";
 import type { Priority } from "@/lib/types";
 
@@ -84,16 +84,10 @@ export async function PATCH(
   } | null;
 
   try {
-    if (body?.statusId && body.statusId !== issue.status_id) {
-      moveIssue({
-        issueId,
-        statusId: body.statusId,
-        actor: user,
-      });
-    }
     const updated = updateIssue(issueId, user, {
       title: body?.title,
       description: body?.description,
+      statusId: body?.statusId,
       priority: body?.priority,
       assigneeIds: body?.assigneeIds,
       dueDate: body?.dueDate,

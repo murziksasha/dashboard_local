@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -85,6 +85,9 @@ export function WidgetControls({
   projectId?: string;
 }) {
   const [items, setItems] = useState(initial);
+  useEffect(() => {
+    setItems(initial);
+  }, [initial]);
   const [, startTransition] = useTransition();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
