@@ -1,3 +1,4 @@
+import { getAssigneesMap } from "./assignees";
 import { all } from "./db";
 import type { IssueRow } from "./issues";
 import { listIssues } from "./issues";
@@ -128,23 +129,12 @@ export function runJql(
   }
 
   const needsHistory = /\b(was|changed)\b/i.test(trimmed);
-  const prefilter: Parameters<typeof listIssues>[1] = {};
-  for (let i = 0; i < whereTokens.length - 2; i++) {
-    const fieldTok = whereTokens[i];
-    const opTok = whereTokens[i + 1];
-    const valTok = whereTokens[i + 2];
-    if (fieldTok?.type !== "word" || opTok?.type !== "op" || opTok.value !== "=") continue;
-    const field = fieldTok.value.toLowerCase();
-    const val = valueOf(valTok).toLowerCase();
-    if (field === "type" && ["epic", "story", "task", "bug", "subtask"].includes(val)) {
-      prefilter.types = [val as IssueRow["type"]];
-    }
-    if (field === "priority" && ["highest", "high", "medium", "low", "lowest"].includes(val)) {
-      prefilter.priorities = [val as NonNullable<IssueRow["priority"]>];
-    }
-  }
-  if (needsHistory && !prefilter.limit) prefilter.limit = 5000;
-  const allProjectIssues = listIssues(projectId, prefilter);
+  const allProjectIssues = listIssues(projectId, needsHistory ? { limit: 5000 } : {});
+  const assigneesMap = getAssigneesMap(allProjectIssues.map((iss) => iss.id));
+  const sprints = all<{ id: string; name: string; status: string }>(
+    `SELECT id, name, status FROM sprints WHERE project_id = ?`,
+    [projectId],
+  );
   const users = all<{ id: string; login: string; name: string }>(
     `SELECT id, login, name FROM users`,
   );
@@ -398,19 +388,13 @@ export function runJql(
         }
         case "assignee": {
           const uid = resolveUser(v);
+          const people = assigneesMap[issue.id] ?? [];
           if (uid === "unassigned") {
-            const empty = !issue.assignee_names && !issue.assignee_id;
+            const empty = people.length === 0 && !issue.assignee_id;
             return op === "!=" ? !empty : empty;
           }
           if (!uid) return false;
-          const names = (issue.assignee_names || issue.assignee_name || "").toLowerCase();
-          const user = users.find((u) => u.id === uid);
-          const hit =
-            issue.assignee_id === uid ||
-            (user
-              ? names.includes(user.name.toLowerCase()) ||
-                names.includes(user.login.toLowerCase())
-              : false);
+          const hit = issue.assignee_id === uid || people.some((p) => p.id === uid);
           return op === "!=" ? !hit : hit;
         }
         case "reporter": {
@@ -431,15 +415,35 @@ export function runJql(
             const empty = !labels.trim();
             return op === "!=" ? !empty : empty;
           }
-          if (op === "~") return labels.includes(v.toLowerCase());
-          return labels
+          if (op === "~" || op === "!~") {
+            const has = labels.includes(v.toLowerCase());
+            return op === "~" ? has : !has;
+          }
+          const exact = labels
             .split(",")
             .map((s) => s.trim())
+            .filter(Boolean)
             .includes(v.toLowerCase());
+          return op === "!=" ? !exact : exact;
         }
         case "sprint": {
-          if (v.toLowerCase() === "empty") return !issue.sprint_id;
-          return issue.sprint_id === v;
+          const lower = v.toLowerCase();
+          if (lower === "empty") {
+            const empty = !issue.sprint_id;
+            return op === "!=" ? !empty : empty;
+          }
+          let hit = false;
+          if (lower === "opensprints()") {
+            hit = !!issue.sprint_id && sprints.some((s) => s.id === issue.sprint_id && s.status === "active");
+          } else if (lower === "futuresprints()") {
+            hit = !!issue.sprint_id && sprints.some((s) => s.id === issue.sprint_id && s.status === "future");
+          } else {
+            const sp = sprints.find(
+              (s) => s.id === v || s.name.toLowerCase() === lower,
+            );
+            hit = sp ? issue.sprint_id === sp.id : issue.sprint_id === v;
+          }
+          return op === "!=" ? !hit : hit;
         }
         case "epic":
         case "epiclink": {
@@ -447,7 +451,7 @@ export function runJql(
             const empty = !issue.epic_id;
             return op === "!=" ? !empty : empty;
           }
-          return (
+          const hit =
             issue.epic_id === v ||
             (!!issue.epic_id &&
               allProjectIssues.some(
@@ -455,23 +459,23 @@ export function runJql(
                   e.id === issue.epic_id &&
                   (e.key.toLowerCase() === v.toLowerCase() ||
                     e.title.toLowerCase() === v.toLowerCase()),
-              ))
-          );
+              ));
+          return op === "!=" ? !hit : hit;
         }
         case "parent": {
           if (v.toLowerCase() === "empty") {
             const empty = !issue.parent_id;
             return op === "!=" ? !empty : empty;
           }
-          return (
+          const hit =
             issue.parent_id === v ||
             (!!issue.parent_id &&
               allProjectIssues.some(
                 (e) =>
                   e.id === issue.parent_id &&
                   e.key.toLowerCase() === v.toLowerCase(),
-              ))
-          );
+              ));
+          return op === "!=" ? !hit : hit;
         }
         case "category":
           return cmp(
@@ -548,10 +552,43 @@ export function runJql(
     const pred = parseExpression(whereTokens);
     let issues = allProjectIssues.filter(pred);
     if (orderField) {
+      const ORDER_COL: Record<string, string> = {
+        due: "due_date",
+        duedate: "due_date",
+        created: "created_at",
+        updated: "updated_at",
+        status: "status_name",
+        assignee: "assignee_name",
+        sp: "story_points",
+        summary: "title",
+      };
+      const col = ORDER_COL[orderField] || orderField;
+      const PRIO_ORDER: Record<string, number> = {
+        highest: 0,
+        high: 1,
+        medium: 2,
+        low: 3,
+        lowest: 4,
+      };
       issues = [...issues].sort((a, b) => {
-        const av = String((a as unknown as Record<string, unknown>)[orderField] ?? "");
-        const bv = String((b as unknown as Record<string, unknown>)[orderField] ?? "");
-        const c = av.localeCompare(bv);
+        let c = 0;
+        if (col === "priority") {
+          c = (PRIO_ORDER[a.priority] ?? 9) - (PRIO_ORDER[b.priority] ?? 9);
+        } else if (col === "story_points") {
+          c = (a.story_points ?? -Infinity) - (b.story_points ?? -Infinity);
+        } else if (col === "key") {
+          const an = Number(a.key.split("-").pop() || 0);
+          const bn = Number(b.key.split("-").pop() || 0);
+          c = an !== bn ? an - bn : a.key.localeCompare(b.key);
+        } else {
+          const av = Object.prototype.hasOwnProperty.call(a, col)
+            ? String((a as unknown as Record<string, unknown>)[col] ?? "")
+            : "";
+          const bv = Object.prototype.hasOwnProperty.call(b, col)
+            ? String((b as unknown as Record<string, unknown>)[col] ?? "")
+            : "";
+          c = av.localeCompare(bv);
+        }
         return orderDir === "desc" ? -c : c;
       });
     }

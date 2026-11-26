@@ -20,6 +20,14 @@ export function rateLimitHit(
   now = Date.now(),
 ): { ok: boolean; remaining: number; retryAfterMs: number } {
   const buckets = store();
+  if (buckets.size > 500) {
+    const staleCutoff = now - windowMs;
+    for (const [k, b] of buckets) {
+      if (!b.times.length || b.times[b.times.length - 1]! <= staleCutoff) {
+        buckets.delete(k);
+      }
+    }
+  }
   const bucket = buckets.get(key) || { times: [] };
   const cutoff = now - windowMs;
   bucket.times = bucket.times.filter((t) => t > cutoff);

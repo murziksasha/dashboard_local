@@ -7,19 +7,23 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function useOverlayLock(open: boolean, onClose: () => void, panelRef: RefObject<HTMLElement | null>) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
     const nodes = panel?.querySelectorAll<HTMLElement>(FOCUSABLE);
-    nodes?.[0]?.focus();
+    const initial = panel?.querySelector<HTMLElement>("[autofocus]") ?? nodes?.[0];
+    initial?.focus();
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !panel) return;
@@ -43,7 +47,7 @@ export function useOverlayLock(open: boolean, onClose: () => void, panelRef: Ref
       document.body.style.overflow = originalOverflow;
       prev?.focus?.();
     };
-  }, [open, onClose, panelRef]);
+  }, [open, panelRef]);
 }
 
 export function Dialog({

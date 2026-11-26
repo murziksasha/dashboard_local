@@ -37,7 +37,8 @@ export default async function GanttPage({
     `SELECT l.from_issue_id, l.to_issue_id, l.link_type
      FROM issue_links l
      JOIN issues i ON i.id = l.from_issue_id
-     WHERE i.project_id = ?`,
+     JOIN issues i2 ON i2.id = l.to_issue_id
+     WHERE i.project_id = ? AND i.deleted_at IS NULL AND i2.deleted_at IS NULL`,
     [id],
   );
 

@@ -83,6 +83,7 @@ function IssueDrawerInner(props: HostProps) {
         <p className="text-sm text-zinc-500">Завантаження…</p>
       ) : (
         <IssueDetailClient
+          key={data.issue.id}
           compact
           issue={{
             id: data.issue.id,
@@ -122,7 +123,10 @@ function IssueDrawerInner(props: HostProps) {
           currentUserId={props.currentUserId}
           currentUserName={props.currentUserName}
           isAdmin={props.isAdmin}
-          onDeleted={close}
+          onDeleted={() => {
+            close();
+            router.refresh();
+          }}
         />
       )}
     </Drawer>

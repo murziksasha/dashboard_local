@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { updateIssueAction } from "@/app/actions/issues";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +57,9 @@ export function GanttView({
 }) {
   const [mode, setMode] = useState<Mode>("timeline");
   const [issues, setIssues] = useState(initialIssues);
+  useEffect(() => {
+    setIssues(initialIssues);
+  }, [initialIssues]);
   const [dragging, setDragging] = useState<{
     id: string;
     mode: "move" | "resize";

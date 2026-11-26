@@ -13,6 +13,13 @@ declare global {
 
 const INTERVAL_MS = 5 * 60 * 1000;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+function isoAgo(ms: number): string {
+  return new Date(Date.now() - ms).toISOString();
+}
+
 function tick() {
   try {
     maybeAutoBackup();
@@ -40,12 +47,13 @@ function tick() {
     log.caught("jobs.recurring", e);
   }
   try {
-    run(`DELETE FROM notifications WHERE created_at < datetime('now', '-90 day')`);
-    run(`DELETE FROM activity_events WHERE created_at < datetime('now', '-180 day')`);
-    run(`DELETE FROM app_events WHERE created_at < datetime('now', '-2 hour')`);
-    run(`DELETE FROM audit_events WHERE created_at < datetime('now', '-365 day')`);
-    run(`DELETE FROM webhook_deliveries WHERE created_at < datetime('now', '-30 day')`);
-    run(`DELETE FROM oidc_states WHERE expires_at < datetime('now')`);
+    const now = new Date().toISOString();
+    run(`DELETE FROM notifications WHERE created_at < ?`, [isoAgo(90 * DAY_MS)]);
+    run(`DELETE FROM activity_events WHERE created_at < ?`, [isoAgo(180 * DAY_MS)]);
+    run(`DELETE FROM app_events WHERE created_at < ?`, [isoAgo(2 * HOUR_MS)]);
+    run(`DELETE FROM audit_events WHERE created_at < ?`, [isoAgo(365 * DAY_MS)]);
+    run(`DELETE FROM webhook_deliveries WHERE created_at < ?`, [isoAgo(30 * DAY_MS)]);
+    run(`DELETE FROM oidc_states WHERE expires_at < ?`, [now]);
     purgeExpiredDeletedIssues();
   } catch (e) {
     log.caught("jobs.cleanup", e);

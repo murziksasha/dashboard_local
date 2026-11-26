@@ -1,14 +1,16 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { withAction } from "@/lib/action";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { all, get, nowIso, run } from "@/lib/db";
+import { get, nowIso, run } from "@/lib/db";
 import { createId } from "@/lib/id";
 import {
   assertMinRole,
   canManageProject,
 } from "@/lib/permissions";
 import { bumpBoardVersion, createProject, getProjectById } from "@/lib/projects";
+import { withTransaction } from "@/lib/tx";
 import type { ProjectRole, StatusCategory } from "@/lib/types";
 
 export async function createProjectAction(formData: FormData) {
@@ -150,8 +152,8 @@ export async function deleteStatusAction(projectId: string, statusId: string) {
   const user = await requireUser();
   assertMinRole(user, projectId, "lead");
   const count = get<{ c: number }>(
-    `SELECT COUNT(*) as c FROM issues WHERE status_id = ?`,
-    [statusId],
+    `SELECT COUNT(*) as c FROM issues WHERE status_id = ? AND project_id = ? AND deleted_at IS NULL`,
+    [statusId, projectId],
   )?.c ?? 0;
   if (count > 0) {
     throw new Error("Неможливо видалити статус: є задачі в цій колонці.");
@@ -221,58 +223,71 @@ export async function createSprintAction(formData: FormData) {
 export async function startSprintAction(projectId: string, sprintId: string) {
   const user = await requireUser();
   assertMinRole(user, projectId, "lead");
+  const sprint = get<{ id: string; status: string }>(
+    `SELECT id, status FROM sprints WHERE id = ? AND project_id = ?`,
+    [sprintId, projectId],
+  );
+  if (!sprint) throw new Error("Спринт не знайдено.");
+  if (sprint.status !== "future") throw new Error("Можна стартувати лише майбутній спринт.");
   const active = get(
     `SELECT id FROM sprints WHERE project_id = ? AND status = 'active'`,
     [projectId],
   );
   if (active) throw new Error("Уже є активний спринт.");
-  run(`UPDATE sprints SET status = 'active' WHERE id = ? AND project_id = ?`, [
-    sprintId,
-    projectId,
-  ]);
   const { recordSprintCommit } = await import("@/lib/reports");
-  recordSprintCommit(sprintId);
+  withTransaction(() => {
+    run(`UPDATE sprints SET status = 'active' WHERE id = ? AND project_id = ?`, [
+      sprintId,
+      projectId,
+    ]);
+    recordSprintCommit(sprintId);
+  });
   bumpBoardVersion(projectId);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function completeSprintAction(formData: FormData) {
-  const user = await requireUser();
-  const projectId = String(formData.get("projectId") || "");
-  const sprintId = String(formData.get("sprintId") || "");
-  const moveTo = String(formData.get("moveTo") || "backlog");
-  assertMinRole(user, projectId, "lead");
+  return withAction("completeSprint", async () => {
+    const user = await requireUser();
+    const projectId = String(formData.get("projectId") || "");
+    const sprintId = String(formData.get("sprintId") || "");
+    const moveTo = String(formData.get("moveTo") || "backlog");
+    assertMinRole(user, projectId, "lead");
 
-  const { recordSprintComplete } = await import("@/lib/reports");
-  recordSprintComplete(sprintId);
-
-  const incomplete = all<{ id: string }>(
-    `SELECT i.id FROM issues i
-     JOIN statuses s ON s.id = i.status_id
-     WHERE i.sprint_id = ? AND s.category != 'done' AND i.deleted_at IS NULL`,
-    [sprintId],
-  );
-
-  if (moveTo === "backlog") {
-    for (const issue of incomplete) {
-      run(`UPDATE issues SET sprint_id = NULL, updated_at = ? WHERE id = ?`, [
-        nowIso(),
-        issue.id,
-      ]);
+    const sprint = get<{ id: string }>(
+      `SELECT id FROM sprints WHERE id = ? AND project_id = ?`,
+      [sprintId, projectId],
+    );
+    if (!sprint) return { error: "Спринт не знайдено." };
+    if (moveTo !== "backlog") {
+      const target = get<{ id: string }>(
+        `SELECT id FROM sprints WHERE id = ? AND project_id = ? AND id != ?`,
+        [moveTo, projectId, sprintId],
+      );
+      if (!target) return { error: "Цільовий спринт не знайдено." };
     }
-  } else {
-    for (const issue of incomplete) {
-      run(`UPDATE issues SET sprint_id = ?, updated_at = ? WHERE id = ?`, [
-        moveTo,
-        nowIso(),
-        issue.id,
-      ]);
-    }
-  }
 
-  run(`UPDATE sprints SET status = 'closed' WHERE id = ?`, [sprintId]);
-  bumpBoardVersion(projectId);
-  revalidatePath(`/projects/${projectId}`);
+    const { recordSprintComplete } = await import("@/lib/reports");
+    withTransaction(() => {
+      recordSprintComplete(sprintId);
+      const ts = nowIso();
+      const nextSprintId = moveTo === "backlog" ? null : moveTo;
+      run(
+        `UPDATE issues SET sprint_id = ?, updated_at = ?
+         WHERE project_id = ? AND sprint_id = ? AND deleted_at IS NULL
+           AND status_id IN (SELECT id FROM statuses WHERE project_id = ? AND category != 'done')`,
+        [nextSprintId, ts, projectId, sprintId, projectId],
+      );
+      run(`UPDATE sprints SET status = 'closed' WHERE id = ? AND project_id = ?`, [
+        sprintId,
+        projectId,
+      ]);
+    });
+    bumpBoardVersion(projectId);
+    revalidatePath(`/projects/${projectId}`);
+    revalidatePath(`/projects/${projectId}/backlog`);
+    return { ok: true as const };
+  });
 }
 
 export async function createCustomFieldAction(formData: FormData) {

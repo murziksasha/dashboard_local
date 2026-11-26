@@ -10,7 +10,7 @@ export default async function TimePage({ params }: { params: Promise<{ id: strin
   const ctx = loadProjectShell(user, id);
   const byDay = worklogByDay(id, 14);
   const byUser = worklogByUser(id, 14);
-  const mine = myWorklogByDay(user.id, 14);
+  const mine = myWorklogByDay(user.id, 14, id);
   const max = Math.max(1, ...byDay.map((d) => d.seconds));
 
   return (

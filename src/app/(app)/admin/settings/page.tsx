@@ -5,7 +5,7 @@ import {
   updateOidcSettingsAction,
 } from "@/app/actions/integration-settings";
 import { updateLdapSettingsAction } from "@/app/actions/ldap-settings";
-import { updateAppNameAction } from "@/app/actions/settings";
+import { AppNameForm } from "@/components/admin/app-name-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { getOidcConfig } from "@/lib/oidc";
 import { settingGet } from "@/lib/db";
 import { formatDate } from "@/lib/utils";
 import { getHealth } from "@/lib/health";
+import { getDataDir } from "@/lib/paths";
 import { listWebhooks } from "@/lib/webhooks";
 import { createWebhookAction, deleteWebhookAction } from "@/app/actions/webhooks";
 import { secretIsSet } from "@/lib/secrets";
@@ -34,6 +35,7 @@ export default async function AdminSettingsPage() {
   const webhooks = listWebhooks();
   const smtpSet = secretIsSet("smtp_pass");
   const tgSet = secretIsSet("telegram_bot_token");
+  const oidcSecretSet = secretIsSet("oidc_client_secret");
 
   return (
     <div className="space-y-6">
@@ -44,21 +46,9 @@ export default async function AdminSettingsPage() {
           <CardTitle>Інстанс</CardTitle>
         </CardHeader>
         <CardContent>
-          <form
-            action={async (fd) => {
-              "use server";
-              await updateAppNameAction(fd);
-            }}
-            className="flex max-w-lg flex-col gap-3"
-          >
-            <div className="space-y-1">
-              <Label>Назва додатку</Label>
-              <Input name="app_name" defaultValue={appName} />
-            </div>
-            <Button type="submit" className="w-fit">
-              Зберегти
-            </Button>
-          </form>
+          <div className="max-w-lg">
+            <AppNameForm initialName={appName} />
+          </div>
           <p className="mt-4 text-sm text-zinc-500">
             Останній бекап: {lastBackup ? formatDate(lastBackup, true) : "ще не було"}
           </p>
@@ -117,7 +107,11 @@ export default async function AdminSettingsPage() {
               </div>
               <div className="space-y-1">
                 <Label>Client Secret</Label>
-                <Input name="oidc_client_secret" type="password" defaultValue={oidc.clientSecret} />
+                <Input
+                  name="oidc_client_secret"
+                  type="password"
+                  placeholder={oidcSecretSet ? "••••••••" : "client secret"}
+                />
               </div>
             </div>
             <div className="space-y-1">
@@ -198,6 +192,7 @@ export default async function AdminSettingsPage() {
         <CardContent className="text-sm">
           <p>DB: {health.db}</p>
           <p>Uptime: {health.uptimeSec}s</p>
+          <p>Каталог даних: <code>{getDataDir()}</code></p>
           <p>Дані: {Math.round(health.disk.dataBytes / 1024)} КБ</p>
           <a href="/api/health" className="text-sky-600 hover:underline">
             GET /api/health

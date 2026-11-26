@@ -213,6 +213,81 @@ function lastRank(projectId: string, statusId: string | null): string | null {
   return row?.rank ?? null;
 }
 
+function assertProjectRefs(
+  projectId: string,
+  refs: {
+    statusId?: string | null;
+    sprintId?: string | null;
+    epicId?: string | null;
+    parentId?: string | null;
+  },
+) {
+  if (refs.statusId) {
+    const ok = get(`SELECT id FROM statuses WHERE id = ? AND project_id = ?`, [
+      refs.statusId,
+      projectId,
+    ]);
+    if (!ok) throw new Error("INVALID_STATUS");
+  }
+  if (refs.sprintId) {
+    const ok = get(`SELECT id FROM sprints WHERE id = ? AND project_id = ?`, [
+      refs.sprintId,
+      projectId,
+    ]);
+    if (!ok) throw new Error("INVALID_SPRINT");
+  }
+  if (refs.epicId) {
+    const ok = get(
+      `SELECT id FROM issues WHERE id = ? AND project_id = ? AND deleted_at IS NULL`,
+      [refs.epicId, projectId],
+    );
+    if (!ok) throw new Error("INVALID_EPIC");
+  }
+  if (refs.parentId) {
+    const ok = get(
+      `SELECT id FROM issues WHERE id = ? AND project_id = ? AND deleted_at IS NULL`,
+      [refs.parentId, projectId],
+    );
+    if (!ok) throw new Error("INVALID_PARENT");
+  }
+}
+
+function assertWipLimit(statusId: string, excludeIssueId: string) {
+  const dest = get<{ wip_limit: number | null }>(
+    `SELECT wip_limit FROM statuses WHERE id = ?`,
+    [statusId],
+  );
+  if (dest?.wip_limit != null) {
+    const n = count(
+      `SELECT COUNT(*) as c FROM issues
+       WHERE status_id = ? AND deleted_at IS NULL AND id != ?`,
+      [statusId, excludeIssueId],
+    );
+    if (n >= dest.wip_limit) {
+      throw new Error(`Ліміт WIP: ${dest.wip_limit}`);
+    }
+  }
+}
+
+function notifyWatchersOfStatusChange(
+  issue: { id: string; key: string; title: string; project_id: string },
+  actorId: string,
+) {
+  const watchers = all<{ user_id: string }>(
+    `SELECT user_id FROM watchers WHERE issue_id = ?`,
+    [issue.id],
+  ).map((w) => w.user_id);
+  notifyMany(
+    watchers.filter((id) => id !== actorId),
+    {
+      type: "status",
+      title: `${issue.key}: змінено статус`,
+      body: issue.title,
+      link: `/projects/${issue.project_id}/issues/${issue.id}`,
+    },
+  );
+}
+
 export function createIssue(params: {
   projectId: string;
   type: IssueType;
@@ -234,6 +309,12 @@ export function createIssue(params: {
   actor: SessionUser;
 }): IssueRow {
   return withTransaction(() => {
+  assertProjectRefs(params.projectId, {
+    statusId: params.statusId,
+    sprintId: params.sprintId,
+    epicId: params.epicId,
+    parentId: params.parentId,
+  });
   const statuses = listStatuses(params.projectId);
   const statusId =
     params.statusId ??
@@ -418,7 +499,7 @@ export function buildIssueWhere(
 
 const SORT_SQL: Record<NonNullable<IssueFilter["sort"]>, string> = {
   rank: "i.rank ASC, i.created_at ASC",
-  key: "i.key",
+  key: "CAST(substr(i.key, instr(i.key, '-') + 1) AS INTEGER)",
   updated: "i.updated_at",
   created: "i.created_at",
   due: "i.due_date",
@@ -496,6 +577,12 @@ export function updateIssue(
   return withTransaction(() => {
   const issue = getIssue(issueId);
   if (!issue) throw new Error("NOT_FOUND");
+  assertProjectRefs(issue.project_id, {
+    statusId: patch.statusId,
+    sprintId: patch.sprintId,
+    epicId: patch.epicId,
+    parentId: patch.parentId,
+  });
 
   const fields: string[] = [];
   const params: unknown[] = [];
@@ -526,6 +613,7 @@ export function updateIssue(
       toStatusId: patch.statusId,
       actorRole: getProjectRole(actor, issue.project_id),
     });
+    assertWipLimit(patch.statusId, issueId);
   }
 
   const before: Record<string, unknown> = {};
@@ -579,19 +667,7 @@ export function updateIssue(
   }
 
   if (patch.statusId && patch.statusId !== issue.status_id) {
-    const watchers = all<{ user_id: string }>(
-      `SELECT user_id FROM watchers WHERE issue_id = ?`,
-      [issueId],
-    ).map((w) => w.user_id);
-    notifyMany(
-      watchers.filter((id) => id !== actor.id),
-      {
-        type: "status",
-        title: `${issue.key}: змінено статус`,
-        body: issue.title,
-        link: `/projects/${issue.project_id}/issues/${issue.id}`,
-      },
-    );
+    notifyWatchersOfStatusChange(issue, actor.id);
   }
 
   logActivity({
@@ -611,12 +687,12 @@ export function updateIssue(
   upsertIssueFts(issueId);
   emitAppEvent({ type: "issue", projectId: issue.project_id, issueId });
   snapshotProjectSprints(issue.project_id);
-  maybeCompleteParent(issueId);
+  maybeCompleteParent(issueId, actor.id);
   return getIssue(issueId)!;
   });
 }
 
-function maybeCompleteParent(issueId: string) {
+function maybeCompleteParent(issueId: string, actorId?: string) {
   const issue = getIssue(issueId);
   if (!issue?.parent_id) return;
   const open = count(
@@ -630,6 +706,11 @@ function maybeCompleteParent(issueId: string) {
   if (!parent) return;
   const done = listStatuses(parent.project_id).find((s) => s.category === "done");
   if (!done || parent.status_id === done.id) return;
+  try {
+    assertWipLimit(done.id, parent.id);
+  } catch {
+    return;
+  }
   run(`UPDATE issues SET status_id = ?, updated_at = ? WHERE id = ?`, [
     done.id,
     nowIso(),
@@ -638,11 +719,12 @@ function maybeCompleteParent(issueId: string) {
   logActivity({
     projectId: parent.project_id,
     issueId: parent.id,
-    actorId: issue.reporter_id,
+    actorId: actorId || issue.reporter_id,
     action: "issue.updated",
     payload: { changes: { status_id: done.id }, auto: "subtasks_done" },
   });
   bumpBoardVersion(parent.project_id);
+  emitAppEvent({ type: "issue", projectId: parent.project_id, issueId: parent.id });
 }
 
 export function moveIssue(params: {
@@ -655,7 +737,9 @@ export function moveIssue(params: {
   return withTransaction(() => {
   const issue = getIssue(params.issueId);
   if (!issue) throw new Error("NOT_FOUND");
-  if (params.statusId !== issue.status_id) {
+  assertProjectRefs(issue.project_id, { statusId: params.statusId });
+  const statusChanged = params.statusId !== issue.status_id;
+  if (statusChanged) {
     assertTransitionAllowed({
       projectId: issue.project_id,
       issueId: issue.id,
@@ -663,24 +747,13 @@ export function moveIssue(params: {
       toStatusId: params.statusId,
       actorRole: getProjectRole(params.actor, issue.project_id),
     });
-    const dest = get<{ wip_limit: number | null }>(
-      `SELECT wip_limit FROM statuses WHERE id = ?`,
-      [params.statusId],
-    );
-    if (dest?.wip_limit != null) {
-      const n = count(
-        `SELECT COUNT(*) as c FROM issues
-         WHERE status_id = ? AND deleted_at IS NULL AND id != ?`,
-        [params.statusId, issue.id],
-      );
-      if (n >= dest.wip_limit) {
-        throw new Error(`Ліміт WIP: ${dest.wip_limit}`);
-      }
-    }
+    assertWipLimit(params.statusId, issue.id);
   }
   const before = params.beforeId ? getIssue(params.beforeId) : null;
   const after = params.afterId ? getIssue(params.afterId) : null;
-  const rank = rankBetween(before?.rank ?? null, after?.rank ?? null);
+  const validBefore = before && before.project_id === issue.project_id ? before : null;
+  const validAfter = after && after.project_id === issue.project_id ? after : null;
+  const rank = rankBetween(validBefore?.rank ?? null, validAfter?.rank ?? null);
   run(
     `UPDATE issues SET status_id = ?, rank = ?, updated_at = ? WHERE id = ?`,
     [params.statusId, rank, nowIso(), params.issueId],
@@ -698,6 +771,15 @@ export function moveIssue(params: {
       rank,
     },
   });
+  if (statusChanged) {
+    notifyWatchersOfStatusChange(issue, params.actor.id);
+    logAudit({
+      action: "issue.update",
+      userId: params.actor.id,
+      login: params.actor.login,
+      detail: issue.key,
+    });
+  }
   if (rank.length > 32) {
     rebalanceRanks(issue.project_id, params.statusId);
   }
@@ -709,7 +791,7 @@ export function moveIssue(params: {
     payload: { statusId: params.statusId },
   });
   snapshotProjectSprints(issue.project_id);
-  maybeCompleteParent(params.issueId);
+  maybeCompleteParent(params.issueId, params.actor.id);
   return getIssue(params.issueId)!;
   });
 }

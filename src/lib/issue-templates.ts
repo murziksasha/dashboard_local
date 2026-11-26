@@ -85,7 +85,11 @@ export function createIssueTemplate(params: {
   return getIssueTemplate(id)!;
 }
 
-export function deleteIssueTemplate(id: string) {
+export function deleteIssueTemplate(id: string, projectId?: string) {
+  if (projectId) {
+    run(`DELETE FROM issue_templates WHERE id = ? AND project_id = ?`, [id, projectId]);
+    return;
+  }
   run(`DELETE FROM issue_templates WHERE id = ?`, [id]);
 }
 

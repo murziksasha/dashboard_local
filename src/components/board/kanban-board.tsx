@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -88,6 +88,7 @@ function IssueCard({
   issue,
   projectId,
   dragging,
+  selected,
   onOpen,
   canEdit,
   statuses,
@@ -96,6 +97,7 @@ function IssueCard({
   issue: BoardIssue;
   projectId: string;
   dragging?: boolean;
+  selected?: boolean;
   onOpen?: (id: string) => void;
   canEdit?: boolean;
   statuses?: BoardStatus[];
@@ -112,6 +114,7 @@ function IssueCard({
       className={cn(
         "group block rounded-lg border border-zinc-200 bg-white p-3 shadow-sm hover:border-sky-300 dark:border-zinc-700 dark:bg-zinc-900",
         dragging && "opacity-50",
+        selected && "border-sky-500 ring-2 ring-sky-500",
       )}
       onClick={(e) => {
         if (dragging) {
@@ -147,10 +150,10 @@ function IssueCard({
       <p className="line-clamp-2 text-sm font-medium leading-snug">{issue.title}</p>
       {canEdit && onQuick ? (
         <div
-          className="mt-1 hidden gap-1 group-hover:flex"
+          className="mt-1 hidden flex-wrap gap-1 group-hover:flex"
           onClick={(e) => e.preventDefault()}
         >
-          {(statuses || []).slice(0, 4).map((s) => (
+          {(statuses || []).map((s) => (
             <button
               key={s.id}
               type="button"
@@ -204,6 +207,7 @@ function IssueCard({
 function SortableIssue({
   issue,
   projectId,
+  selected,
   onOpen,
   canEdit,
   statuses,
@@ -211,6 +215,7 @@ function SortableIssue({
 }: {
   issue: BoardIssue;
   projectId: string;
+  selected?: boolean;
   onOpen?: (id: string) => void;
   canEdit?: boolean;
   statuses?: BoardStatus[];
@@ -241,6 +246,7 @@ function SortableIssue({
           issue={issue}
           projectId={projectId}
           dragging={isDragging}
+          selected={selected}
           onOpen={onOpen}
           canEdit={canEdit}
           statuses={statuses}
@@ -257,6 +263,7 @@ function Column({
   projectId,
   laneId,
   canEdit,
+  selectedId,
   onQuickAdd,
   onOpen,
   onQuick,
@@ -267,6 +274,7 @@ function Column({
   projectId: string;
   laneId: string;
   canEdit: boolean;
+  selectedId?: string | null;
   onQuickAdd: (statusId: string, title: string) => void;
   onOpen?: (id: string) => void;
   onQuick?: (id: string, patch: Record<string, string>) => void;
@@ -309,6 +317,7 @@ function Column({
               key={issue.id}
               issue={issue}
               projectId={projectId}
+              selected={selectedId === issue.id}
               onOpen={onOpen}
               canEdit={canEdit}
               statuses={allStatuses}
@@ -462,6 +471,10 @@ function KanbanBoardInner({
 
   const lanes = useMemo(() => buildLanes(issues, swimlane), [issues, swimlane]);
 
+  const versionRef = useRef(version);
+  versionRef.current = version;
+  const ignoreSseUntilRef = useRef(0);
+
   useEffect(() => {
     setIssues(initialIssues);
     setVersion(boardVersion);
@@ -473,6 +486,7 @@ function KanbanBoardInner({
     try {
       es = new EventSource(`/api/events?projectId=${projectId}`);
       es.onmessage = (ev) => {
+        if (Date.now() < ignoreSseUntilRef.current) return;
         try {
           const data = JSON.parse(ev.data) as { type?: string };
           if (data.type === "board" || data.type === "issue") setStale(true);
@@ -484,12 +498,12 @@ function KanbanBoardInner({
       // ignore
     }
     const t = setInterval(async () => {
-      if (document.hidden) return;
+      if (document.hidden || Date.now() < ignoreSseUntilRef.current) return;
       try {
         const res = await fetch(`/api/board-version/${projectId}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as { version: number };
-        if (data.version !== version) setStale(true);
+        if (data.version !== versionRef.current) setStale(true);
       } catch {
         // ignore
       }
@@ -498,7 +512,7 @@ function KanbanBoardInner({
       clearInterval(t);
       es?.close();
     };
-  }, [projectId, version]);
+  }, [projectId]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -527,8 +541,33 @@ function KanbanBoardInner({
 
   function onQuick(id: string, patch: Record<string, string>) {
     const snapshot = issues;
+    ignoreSseUntilRef.current = Date.now() + 2000;
     if (patch.statusId) {
-      setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, status_id: patch.statusId } : i)));
+      const colIssues = issues.filter((i) => i.status_id === patch.statusId && i.id !== id);
+      const beforeId = colIssues.at(-1)?.id ?? null;
+      const activeIssue = issues.find((i) => i.id === id);
+      if (activeIssue) {
+        setIssues(placeIssue(issues, activeIssue, patch.statusId, beforeId, null));
+      } else {
+        setIssues((prev) => prev.map((i) => (i.id === id ? { ...i, status_id: patch.statusId } : i)));
+      }
+      setVersion((v) => v + 1);
+      startTransition(async () => {
+        const res = await moveIssueAction({
+          issueId: id,
+          statusId: patch.statusId,
+          beforeId,
+          afterId: null,
+        });
+        if (res && "error" in res && res.error) {
+          setIssues(snapshot);
+          setVersion((v) => v - 1);
+          toast.push(res.error, "error");
+        } else {
+          toast.push("Збережено");
+        }
+      });
+      return;
     }
     startTransition(async () => {
       const fd = new FormData();
@@ -555,11 +594,14 @@ function KanbanBoardInner({
     if (!activeIssue) return;
 
     const overData = over.data.current as
-      | { statusId?: string; type?: string }
+      | { statusId?: string; laneId?: string; type?: string }
       | undefined;
     let targetStatusId = overData?.statusId || null;
+    let targetLaneId = overData?.laneId || null;
     if (!targetStatusId && String(over.id).includes("::")) {
-      targetStatusId = String(over.id).split("::")[1] ?? null;
+      const [lid, sid] = String(over.id).split("::");
+      targetLaneId = targetLaneId ?? (lid || null);
+      targetStatusId = sid ?? null;
     }
     if (!targetStatusId) {
       const overIssue = issues.find((i) => i.id === over.id);
@@ -567,7 +609,11 @@ function KanbanBoardInner({
     }
     if (!targetStatusId) return;
 
-    const columnIssues = issues.filter(
+    const laneScope =
+      swimlane !== "none" && targetLaneId
+        ? lanes.find((l) => l.id === targetLaneId)?.issues ?? issues
+        : issues;
+    const columnIssues = laneScope.filter(
       (i) => i.status_id === targetStatusId && i.id !== activeIssue.id,
     );
     const overIndex = columnIssues.findIndex((i) => i.id === over.id);
@@ -578,6 +624,7 @@ function KanbanBoardInner({
     const afterId = overIndex >= 0 ? columnIssues[overIndex]?.id ?? null : null;
 
     const snapshot = issues;
+    ignoreSseUntilRef.current = Date.now() + 2000;
     setIssues(placeIssue(issues, activeIssue, targetStatusId, beforeId, afterId));
     setVersion((v) => v + 1);
 
@@ -598,6 +645,7 @@ function KanbanBoardInner({
   }
 
   function onQuickAdd(statusId: string, title: string) {
+    ignoreSseUntilRef.current = Date.now() + 2000;
     const tempId = `tmp_${Date.now()}`;
     const temp: BoardIssue = {
       id: tempId,
@@ -622,10 +670,12 @@ function KanbanBoardInner({
         return;
       }
       toast.push("Задачу створено");
-      if (res && "id" in res && res.id) {
+      if (res && "id" in res && typeof res.id === "string") {
+        const createdId = res.id;
+        const createdKey = "key" in res && typeof res.key === "string" ? res.key : undefined;
         setIssues((prev) =>
           prev.map((i) =>
-            i.id === tempId ? { ...i, id: res.id, key: res.key || i.key } : i,
+            i.id === tempId ? { ...i, id: createdId, key: createdKey || i.key } : i,
           ),
         );
         setVersion((v) => v + 1);
@@ -710,6 +760,7 @@ function KanbanBoardInner({
                       projectId={projectId}
                       laneId={lane.id}
                       canEdit={canEdit}
+                      selectedId={selectedId}
                       onQuickAdd={onQuickAdd}
                       onOpen={openIssue}
                       onQuick={onQuick}

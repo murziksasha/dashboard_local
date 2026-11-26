@@ -65,7 +65,11 @@ export function createRecurring(params: {
   return all<RecurringIssue>(`SELECT * FROM recurring_issues WHERE id = ?`, [id])[0]!;
 }
 
-export function deleteRecurring(id: string) {
+export function deleteRecurring(id: string, projectId?: string) {
+  if (projectId) {
+    run(`DELETE FROM recurring_issues WHERE id = ? AND project_id = ?`, [id, projectId]);
+    return;
+  }
   run(`DELETE FROM recurring_issues WHERE id = ?`, [id]);
 }
 
@@ -77,23 +81,27 @@ export function runRecurringIssues(): number {
   let n = 0;
   for (const row of due) {
     try {
-      const actor: SessionUser = {
-        id: row.created_by,
-        login: "system",
-        name: "System",
-        email: null,
-        global_role: "user",
-      };
-      const user = all<{ login: string; name: string; email: string | null; global_role: "admin" | "user" }>(
-        `SELECT login, name, email, global_role FROM users WHERE id = ?`,
+      const user = all<{
+        login: string;
+        name: string;
+        email: string | null;
+        global_role: "admin" | "user";
+        active: number;
+      }>(
+        `SELECT login, name, email, global_role, active FROM users WHERE id = ?`,
         [row.created_by],
       )[0];
-      if (user) {
-        actor.login = user.login;
-        actor.name = user.name;
-        actor.email = user.email;
-        actor.global_role = user.global_role;
+      if (!user || !user.active) {
+        run(`UPDATE recurring_issues SET enabled = 0 WHERE id = ?`, [row.id]);
+        continue;
       }
+      const actor: SessionUser = {
+        id: row.created_by,
+        login: user.login,
+        name: user.name,
+        email: user.email,
+        global_role: user.global_role,
+      };
       createIssue({
         projectId: row.project_id,
         type: row.type,

@@ -2,6 +2,7 @@ import { logActivity } from "./activity";
 import { all, get, nowIso, run } from "./db";
 import { emitAppEvent } from "./events";
 import { createId } from "./id";
+import { seedBuiltinTemplates } from "./issue-templates";
 import type { Project, SessionUser, Status } from "./types";
 import { DEFAULT_STATUSES } from "./types";
 
@@ -87,6 +88,8 @@ export function createProject(params: {
   }
 
   // default personal-ish project widgets for lead skipped — dashboards use dynamic queries
+
+  seedBuiltinTemplates(id);
 
   logActivity({
     projectId: id,

@@ -11,6 +11,7 @@ import {
   createWorkflowRuleAction,
   deleteWorkflowRuleAction,
 } from "@/app/actions/workflow";
+import { CsvImportForm } from "@/components/projects/csv-import-form";
 import { ProjectNav } from "@/components/projects/project-nav";
 import { StatusManager } from "@/components/projects/status-manager";
 import { Button } from "@/components/ui/button";
@@ -32,7 +33,6 @@ import {
   deleteTemplateAction,
   seedTemplatesAction,
 } from "@/app/actions/templates";
-import { importCsvAction } from "@/app/actions/import-export";
 import { listIssueTemplates } from "@/lib/issue-templates";
 import { listRecurring } from "@/lib/recurring";
 import { listWebhooks } from "@/lib/webhooks";
@@ -259,7 +259,8 @@ export default async function ProjectSettingsPage({
                   <div>
                     <p className="font-medium">{r.name}</p>
                     <p className="text-xs text-zinc-500">
-                      {r.from_status_id || "*"} → {r.to_status_id || "*"}
+                      {ctx.statuses.find((s) => s.id === r.from_status_id)?.name || "*"} →{" "}
+                      {ctx.statuses.find((s) => s.id === r.to_status_id)?.name || "*"}
                       {r.require_assignee ? " · assignee" : ""}
                       {r.require_due_date ? " · due" : ""}
                       {r.block_if_open_blockers ? " · no open blockers" : ""}
@@ -430,20 +431,7 @@ export default async function ProjectSettingsPage({
             <CardTitle>Імпорт CSV</CardTitle>
           </CardHeader>
           <CardContent>
-            <form
-              action={async (fd) => {
-                "use server";
-                await importCsvAction(fd);
-              }}
-              className="space-y-2"
-            >
-              <input type="hidden" name="projectId" value={id} />
-              <Input name="file" type="file" accept=".csv,text/csv" />
-              <p className="text-xs text-zinc-500">Колонки: title, type, priority, description, due_date, labels, status</p>
-              <Button type="submit" size="sm">
-                Імпортувати
-              </Button>
-            </form>
+            <CsvImportForm projectId={id} />
           </CardContent>
         </Card>
 

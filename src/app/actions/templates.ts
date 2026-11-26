@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { withAction } from "@/lib/action";
 import { requireUser } from "@/lib/auth";
 import {
   createIssueTemplate,
@@ -31,11 +32,13 @@ export async function createTemplateAction(formData: FormData) {
 }
 
 export async function deleteTemplateAction(id: string, projectId: string) {
-  const user = await requireUser();
-  if (!canManageProject(user, projectId)) throw new Error("FORBIDDEN");
-  deleteIssueTemplate(id);
-  revalidatePath(`/projects/${projectId}/settings`);
-  return { ok: true as const };
+  return withAction("deleteTemplate", async () => {
+    const user = await requireUser();
+    if (!canManageProject(user, projectId)) throw new Error("FORBIDDEN");
+    deleteIssueTemplate(id, projectId);
+    revalidatePath(`/projects/${projectId}/settings`);
+    return { ok: true as const };
+  });
 }
 
 export async function seedTemplatesAction(projectId: string) {
@@ -70,9 +73,11 @@ export async function createRecurringAction(formData: FormData) {
 }
 
 export async function deleteRecurringAction(id: string, projectId: string) {
-  const user = await requireUser();
-  if (!canManageProject(user, projectId)) throw new Error("FORBIDDEN");
-  deleteRecurring(id);
-  revalidatePath(`/projects/${projectId}/settings`);
-  return { ok: true as const };
+  return withAction("deleteRecurring", async () => {
+    const user = await requireUser();
+    if (!canManageProject(user, projectId)) throw new Error("FORBIDDEN");
+    deleteRecurring(id, projectId);
+    revalidatePath(`/projects/${projectId}/settings`);
+    return { ok: true as const };
+  });
 }

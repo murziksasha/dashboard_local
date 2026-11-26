@@ -29,15 +29,33 @@ export function listWebhooks(projectId?: string): WebhookRow[] {
     return all<WebhookRow>(
       `SELECT id, project_id, url, secret, events, enabled, created_at
        FROM webhooks
-       WHERE project_id IS NULL OR project_id = ?
+       WHERE project_id = ?
        ORDER BY created_at DESC`,
       [projectId],
     );
   }
   return all<WebhookRow>(
     `SELECT id, project_id, url, secret, events, enabled, created_at
-     FROM webhooks ORDER BY created_at DESC`,
+     FROM webhooks WHERE project_id IS NULL ORDER BY created_at DESC`,
   );
+}
+
+export function isSafeWebhookUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    if (
+      host === "169.254.169.254" ||
+      host === "metadata.google.internal" ||
+      host === "0.0.0.0"
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function createWebhook(params: {
@@ -57,12 +75,27 @@ export function createWebhook(params: {
   return get<WebhookRow>(`SELECT * FROM webhooks WHERE id = ?`, [id])!;
 }
 
-export function deleteWebhook(id: string) {
-  run(`DELETE FROM webhooks WHERE id = ?`, [id]);
+export function deleteWebhook(id: string, projectId?: string | null) {
+  if (projectId) {
+    run(`DELETE FROM webhooks WHERE id = ? AND project_id = ?`, [id, projectId]);
+    return;
+  }
+  run(`DELETE FROM webhooks WHERE id = ? AND project_id IS NULL`, [id]);
 }
 
-export function setWebhookEnabled(id: string, enabled: boolean) {
-  run(`UPDATE webhooks SET enabled = ? WHERE id = ?`, [enabled ? 1 : 0, id]);
+export function setWebhookEnabled(id: string, enabled: boolean, projectId?: string | null) {
+  if (projectId) {
+    run(`UPDATE webhooks SET enabled = ? WHERE id = ? AND project_id = ?`, [
+      enabled ? 1 : 0,
+      id,
+      projectId,
+    ]);
+    return;
+  }
+  run(`UPDATE webhooks SET enabled = ? WHERE id = ? AND project_id IS NULL`, [
+    enabled ? 1 : 0,
+    id,
+  ]);
 }
 
 function matchesEvent(spec: string, type: string): boolean {
@@ -132,7 +165,7 @@ export function dispatchWebhooks(event: WebhookEvent) {
   }
   const matched = hooks.filter((h) => {
     if (!matchesEvent(h.events, event.type)) return false;
-    if (h.project_id && event.projectId && h.project_id !== event.projectId) return false;
+    if (h.project_id && event.projectId !== h.project_id) return false;
     return true;
   });
   for (const hook of matched) {

@@ -1,11 +1,19 @@
 import { getSessionUser } from "@/lib/auth";
-import { listAppEventsSince, onAppEvent, type AppEvent } from "@/lib/events";
+import { latestAppEventId, listAppEventsSince, onAppEvent, type AppEvent } from "@/lib/events";
+import { canAccessProject } from "@/lib/permissions";
+import { listProjectsForUser } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
-function visible(e: AppEvent, userId: string, projectId: string) {
+function visible(
+  e: AppEvent,
+  userId: string,
+  projectId: string,
+  allowedProjects: Set<string>,
+) {
   if (e.type === "notification") return e.userId === userId;
-  if (projectId && e.projectId && e.projectId !== projectId) return false;
+  if (!e.projectId || !allowedProjects.has(e.projectId)) return false;
+  if (projectId && e.projectId !== projectId) return false;
   return true;
 }
 
@@ -14,17 +22,30 @@ export async function GET(req: Request) {
   if (!user) return new Response("unauthorized", { status: 401 });
   const url = new URL(req.url);
   const projectId = url.searchParams.get("projectId") || "";
-  let lastId = Number(url.searchParams.get("lastId") || 0);
-  if (!Number.isFinite(lastId) || lastId < 0) lastId = 0;
+  if (projectId && !canAccessProject(user, projectId)) {
+    return new Response("forbidden", { status: 403 });
+  }
+  const allowedProjects = new Set(listProjectsForUser(user).map((p) => p.id));
+
+  const rawLastId = url.searchParams.get("lastId");
+  let lastId =
+    rawLastId != null && rawLastId !== "" ? Number(rawLastId) : latestAppEventId();
+  if (!Number.isFinite(lastId) || lastId < 0) lastId = latestAppEventId();
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
+      let closed = false;
       const send = (e: AppEvent) => {
-        if (!visible(e, user.id, projectId)) return;
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+        if (closed || !visible(e, user.id, projectId, allowedProjects)) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+        } catch {
+          closed = true;
+        }
       };
       const flush = () => {
+        if (closed) return;
         try {
           const rows = listAppEventsSince(lastId, 80);
           for (const row of rows) {
@@ -40,15 +61,18 @@ export async function GET(req: Request) {
         lastId = Math.max(lastId, e.id ?? lastId);
         send(e);
       });
-      const poll = setInterval(flush, 8000);
+      const poll = setInterval(flush, 3000);
       const ping = setInterval(() => {
+        if (closed) return;
         try {
           controller.enqueue(encoder.encode(`: ping\n\n`));
         } catch {
+          closed = true;
           clearInterval(ping);
         }
       }, 25000);
       const abort = () => {
+        closed = true;
         clearInterval(poll);
         clearInterval(ping);
         off();

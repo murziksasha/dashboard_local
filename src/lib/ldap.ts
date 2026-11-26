@@ -26,9 +26,24 @@ export function isLdapEnabled() {
   return cfg.enabled && !!cfg.url && !!cfg.baseDn;
 }
 
-function fillTemplate(tpl: string, username: string, baseDn: string) {
+function escapeLdapFilter(value: string): string {
+  return value.replace(/[\\*()\0]/g, (ch) => {
+    const hex = ch.charCodeAt(0).toString(16).padStart(2, "0");
+    return `\\${hex}`;
+  });
+}
+
+function escapeLdapDnValue(value: string): string {
+  return value
+    .replace(/([\\,#+<>;="])/g, "\\$1")
+    .replace(/^ /, "\\ ")
+    .replace(/ $/, "\\ ");
+}
+
+function fillTemplate(tpl: string, username: string, baseDn: string, mode: "dn" | "filter") {
+  const safeUser = mode === "dn" ? escapeLdapDnValue(username) : escapeLdapFilter(username);
   return tpl
-    .replaceAll("{username}", username)
+    .replaceAll("{username}", safeUser)
     .replaceAll("{baseDn}", baseDn);
 }
 
@@ -43,7 +58,7 @@ export async function ldapAuthenticate(
   const cfg = getLdapConfig();
   if (!cfg.enabled || !cfg.url || !password) return null;
 
-  const bindDn = fillTemplate(cfg.bindDnTemplate, username, cfg.baseDn);
+  const bindDn = fillTemplate(cfg.bindDnTemplate, username, cfg.baseDn, "dn");
   const client = new Client({ url: cfg.url, timeout: 8000, connectTimeout: 8000 });
 
   try {
@@ -52,7 +67,7 @@ export async function ldapAuthenticate(
     let name = username;
     let email: string | null = null;
     try {
-      const filter = fillTemplate(cfg.searchFilter, username, cfg.baseDn);
+      const filter = fillTemplate(cfg.searchFilter, username, cfg.baseDn, "filter");
       const { searchEntries } = await client.search(cfg.baseDn, {
         scope: "sub",
         filter,

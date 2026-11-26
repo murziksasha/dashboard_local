@@ -1,13 +1,45 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import fs from "fs";
+import path from "path";
 import { get, run } from "./db";
 import { loadEnv } from "./env";
+import { getDataDir } from "./paths";
 
 const PREFIX = "enc:v1:";
 
+declare global {
+  var __dashboardSecretKey: Buffer | undefined;
+}
+
+function getOrCreateLocalSecret(): string {
+  const dir = getDataDir();
+  const keyFile = path.join(dir, ".secret");
+  try {
+    if (fs.existsSync(keyFile)) {
+      const existing = fs.readFileSync(keyFile, "utf8").trim();
+      if (existing.length >= 32) return existing;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    const generated = randomBytes(32).toString("hex");
+    fs.writeFileSync(keyFile, generated, { encoding: "utf8", mode: 0o600 });
+    return generated;
+  } catch {
+    return "dashboard-local-dev-key";
+  }
+}
+
 function keyBytes(): Buffer {
   const env = loadEnv();
-  const raw = env.DASHBOARD_SECRET || env.APP_SECRET || "dashboard-local-dev-key";
-  return createHash("sha256").update(raw).digest();
+  const raw = env.DASHBOARD_SECRET || env.APP_SECRET;
+  if (raw) {
+    return createHash("sha256").update(raw).digest();
+  }
+  if (!global.__dashboardSecretKey) {
+    global.__dashboardSecretKey = createHash("sha256")
+      .update(getOrCreateLocalSecret())
+      .digest();
+  }
+  return global.__dashboardSecretKey;
 }
 
 export function encryptSecret(plain: string): string {

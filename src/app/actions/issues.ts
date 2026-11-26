@@ -3,6 +3,7 @@
 import fs from "fs";
 import path from "path";
 import { revalidatePath } from "next/cache";
+import { withAction } from "@/lib/action";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { all, get, nowIso, run } from "@/lib/db";
@@ -28,143 +29,160 @@ import { parseDurationToSeconds } from "@/lib/utils";
 import { CreateIssueInput, parseWith } from "@/lib/validation";
 
 export async function createIssueAction(formData: FormData) {
-  const user = await requireUser();
-  const parsed = parseWith(CreateIssueInput, {
-    projectId: String(formData.get("projectId") || ""),
-    title: String(formData.get("title") || ""),
-    type: String(formData.get("type") || "task") || "task",
-    description: String(formData.get("description") || "") || undefined,
-    statusId: String(formData.get("statusId") || "") || undefined,
-    priority: String(formData.get("priority") || "medium") || "medium",
-    parentId: String(formData.get("parentId") || "") || undefined,
-    epicId: String(formData.get("epicId") || "") || undefined,
-    sprintId: String(formData.get("sprintId") || "") || undefined,
+  return withAction("createIssue", async () => {
+    const user = await requireUser();
+    const parsed = parseWith(CreateIssueInput, {
+      projectId: String(formData.get("projectId") || ""),
+      title: String(formData.get("title") || ""),
+      type: String(formData.get("type") || "task") || "task",
+      description: String(formData.get("description") || "") || undefined,
+      statusId: String(formData.get("statusId") || "") || undefined,
+      priority: String(formData.get("priority") || "medium") || "medium",
+      parentId: String(formData.get("parentId") || "") || undefined,
+      epicId: String(formData.get("epicId") || "") || undefined,
+      sprintId: String(formData.get("sprintId") || "") || undefined,
+    });
+    if (!parsed.ok) return { error: parsed.error };
+    const projectId = parsed.data.projectId;
+    if (!canEditIssues(user, projectId)) throw new Error("FORBIDDEN");
+
+    const title = parsed.data.title;
+
+    const labels = String(formData.get("labels") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const storyPointsRaw = String(formData.get("story_points") || "").trim();
+    const estimateRaw = String(formData.get("original_estimate_sec") || "").trim();
+
+    const issue = createIssue({
+      projectId,
+      type: parsed.data.type || "task",
+      title,
+      description: parsed.data.description,
+      statusId: parsed.data.statusId || undefined,
+      priority: parsed.data.priority || "medium",
+      assigneeIds: parseAssigneeIds(formData),
+      reporterId: user.id,
+      startDate: String(formData.get("start_date") || "") || null,
+      parentId: parsed.data.parentId || null,
+      epicId: parsed.data.epicId || null,
+      sprintId: parsed.data.sprintId || null,
+      storyPoints: storyPointsRaw !== "" ? Number(storyPointsRaw) : null,
+      originalEstimateSec: estimateRaw !== "" ? Number(estimateRaw) : null,
+      dueDate: String(formData.get("due_date") || "") || null,
+      labels,
+      actor: user,
+    });
+
+    revalidatePath(`/projects/${projectId}`);
+    return { ok: true as const, id: issue.id, key: issue.key };
   });
-  if (!parsed.ok) return { error: parsed.error };
-  const projectId = parsed.data.projectId;
-  if (!canEditIssues(user, projectId)) throw new Error("FORBIDDEN");
-
-  const title = parsed.data.title;
-
-  const labels = String(formData.get("labels") || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const storyPointsRaw = String(formData.get("story_points") || "");
-  const estimateRaw = String(formData.get("original_estimate_sec") || "");
-
-  const issue = createIssue({
-    projectId,
-    type: parsed.data.type || "task",
-    title,
-    description: parsed.data.description,
-    statusId: parsed.data.statusId || undefined,
-    priority: parsed.data.priority || "medium",
-    assigneeIds: parseAssigneeIds(formData),
-    reporterId: user.id,
-    startDate: String(formData.get("start_date") || "") || null,
-    parentId: parsed.data.parentId || null,
-    epicId: parsed.data.epicId || null,
-    sprintId: parsed.data.sprintId || null,
-    storyPoints: storyPointsRaw ? Number(storyPointsRaw) : null,
-    originalEstimateSec: estimateRaw ? Number(estimateRaw) : null,
-    dueDate: String(formData.get("due_date") || "") || null,
-    labels,
-    actor: user,
-  });
-
-  revalidatePath(`/projects/${projectId}`);
-  return { ok: true, id: issue.id, key: issue.key };
 }
 
 export async function updateIssueAction(formData: FormData) {
-  const user = await requireUser();
-  const issueId = String(formData.get("issueId") || "");
-  const issue = get<{ project_id: string }>(
-    `SELECT project_id FROM issues WHERE id = ?`,
-    [issueId],
-  );
-  if (!issue) return { error: "Не знайдено." };
-  if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
+  return withAction("updateIssue", async () => {
+    const user = await requireUser();
+    const issueId = String(formData.get("issueId") || "");
+    const issue = get<{ project_id: string }>(
+      `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [issueId],
+    );
+    if (!issue) return { error: "Не знайдено." };
+    if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
 
-  const labels = formData.has("labels")
-    ? String(formData.get("labels") || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : undefined;
+    const labels = formData.has("labels")
+      ? String(formData.get("labels") || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined;
 
-  updateIssue(issueId, user, {
-    title: formData.has("title")
-      ? String(formData.get("title") || "")
-      : undefined,
-    description: formData.has("description")
-      ? String(formData.get("description") || "")
-      : undefined,
-    statusId: formData.has("statusId")
-      ? String(formData.get("statusId") || "")
-      : undefined,
-    priority: formData.has("priority")
-      ? (String(formData.get("priority") || "") as Priority)
-      : undefined,
-    assigneeIds: formData.has("assigneeIds") || formData.has("assigneeId")
-      ? parseAssigneeIds(formData)
-      : undefined,
-    startDate: formData.has("start_date")
-      ? String(formData.get("start_date") || "") || null
-      : undefined,
-    epicId: formData.has("epicId")
-      ? String(formData.get("epicId") || "") || null
-      : undefined,
-    sprintId: formData.has("sprintId")
-      ? String(formData.get("sprintId") || "") || null
-      : undefined,
-    parentId: formData.has("parentId")
-      ? String(formData.get("parentId") || "") || null
-      : undefined,
-    storyPoints: formData.has("story_points")
-      ? Number(formData.get("story_points") || 0) || null
-      : undefined,
-    originalEstimateSec: formData.has("original_estimate")
-      ? parseDurationToSeconds(String(formData.get("original_estimate") || ""))
-      : formData.has("original_estimate_sec")
-        ? Number(formData.get("original_estimate_sec") || 0) || null
+    const spRaw = formData.has("story_points")
+      ? String(formData.get("story_points") ?? "").trim()
+      : undefined;
+    const origSecRaw = formData.has("original_estimate_sec")
+      ? String(formData.get("original_estimate_sec") ?? "").trim()
+      : undefined;
+    const remSecRaw = formData.has("remaining_estimate_sec")
+      ? String(formData.get("remaining_estimate_sec") ?? "").trim()
+      : undefined;
+
+    updateIssue(issueId, user, {
+      title: formData.has("title")
+        ? String(formData.get("title") || "")
         : undefined,
-    remainingEstimateSec: formData.has("remaining_estimate")
-      ? parseDurationToSeconds(String(formData.get("remaining_estimate") || ""))
-      : formData.has("remaining_estimate_sec")
-        ? Number(formData.get("remaining_estimate_sec") || 0) || null
+      description: formData.has("description")
+        ? String(formData.get("description") || "")
         : undefined,
-    dueDate: formData.has("due_date")
-      ? String(formData.get("due_date") || "") || null
-      : undefined,
-    type: formData.has("type")
-      ? (String(formData.get("type") || "") as IssueType)
-      : undefined,
-    labels,
-  });
+      statusId: formData.has("statusId")
+        ? String(formData.get("statusId") || "")
+        : undefined,
+      priority: formData.has("priority")
+        ? (String(formData.get("priority") || "") as Priority)
+        : undefined,
+      assigneeIds: formData.has("assigneeIds") || formData.has("assigneeId")
+        ? parseAssigneeIds(formData)
+        : undefined,
+      startDate: formData.has("start_date")
+        ? String(formData.get("start_date") || "") || null
+        : undefined,
+      epicId: formData.has("epicId")
+        ? String(formData.get("epicId") || "") || null
+        : undefined,
+      sprintId: formData.has("sprintId")
+        ? String(formData.get("sprintId") || "") || null
+        : undefined,
+      parentId: formData.has("parentId")
+        ? String(formData.get("parentId") || "") || null
+        : undefined,
+      storyPoints:
+        spRaw !== undefined ? (spRaw === "" ? null : Number(spRaw)) : undefined,
+      originalEstimateSec: formData.has("original_estimate")
+        ? parseDurationToSeconds(String(formData.get("original_estimate") || ""))
+        : origSecRaw !== undefined
+          ? origSecRaw === ""
+            ? null
+            : Number(origSecRaw)
+          : undefined,
+      remainingEstimateSec: formData.has("remaining_estimate")
+        ? parseDurationToSeconds(String(formData.get("remaining_estimate") || ""))
+        : remSecRaw !== undefined
+          ? remSecRaw === ""
+            ? null
+            : Number(remSecRaw)
+          : undefined,
+      dueDate: formData.has("due_date")
+        ? String(formData.get("due_date") || "") || null
+        : undefined,
+      type: formData.has("type")
+        ? (String(formData.get("type") || "") as IssueType)
+        : undefined,
+      labels,
+    });
 
-  // custom fields
-  const customFields = all<{ id: string }>(
-    `SELECT id FROM custom_field_defs WHERE project_id = ?`,
-    [issue.project_id],
-  );
-  for (const field of customFields) {
-    const key = `cf_${field.id}`;
-    if (formData.has(key)) {
-      const value = String(formData.get(key) || "");
-      run(
-        `INSERT INTO custom_field_values (field_id, issue_id, value) VALUES (?, ?, ?)
-         ON CONFLICT(field_id, issue_id) DO UPDATE SET value = excluded.value`,
-        [field.id, issueId, value],
-      );
+    // custom fields
+    const customFields = all<{ id: string }>(
+      `SELECT id FROM custom_field_defs WHERE project_id = ?`,
+      [issue.project_id],
+    );
+    for (const field of customFields) {
+      const key = `cf_${field.id}`;
+      if (formData.has(key)) {
+        const value = String(formData.get(key) || "");
+        run(
+          `INSERT INTO custom_field_values (field_id, issue_id, value) VALUES (?, ?, ?)
+           ON CONFLICT(field_id, issue_id) DO UPDATE SET value = excluded.value`,
+          [field.id, issueId, value],
+        );
+      }
     }
-  }
 
-  revalidatePath(`/projects/${issue.project_id}`);
-  revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
-  return { ok: true };
+    revalidatePath(`/projects/${issue.project_id}`);
+    revalidatePath(`/projects/${issue.project_id}/issues/${issueId}`);
+    return { ok: true as const };
+  });
 }
 
 export async function moveIssueAction(input: {
@@ -173,20 +191,18 @@ export async function moveIssueAction(input: {
   beforeId?: string | null;
   afterId?: string | null;
 }) {
-  const user = await requireUser();
-  const issue = get<{ project_id: string }>(
-    `SELECT project_id FROM issues WHERE id = ?`,
-    [input.issueId],
-  );
-  if (!issue) throw new Error("NOT_FOUND");
-  if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
-  try {
+  return withAction("moveIssue", async () => {
+    const user = await requireUser();
+    const issue = get<{ project_id: string }>(
+      `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [input.issueId],
+    );
+    if (!issue) return { error: "Не знайдено." };
+    if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
     moveIssue({ ...input, actor: user });
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : "Перехід заборонено" };
-  }
-  revalidatePath(`/projects/${issue.project_id}`);
-  return { ok: true };
+    revalidatePath(`/projects/${issue.project_id}`);
+    return { ok: true as const };
+  });
 }
 
 export async function addCommentAction(formData: FormData) {
@@ -212,10 +228,12 @@ export async function addCommentAction(formData: FormData) {
 }
 
 export async function loadIssueWorkspaceAction(projectId: string, issueId: string) {
-  const user = await requireUser();
-  const data = loadIssueWorkspace(user, projectId, issueId);
-  if (!data) return { error: "Не знайдено." as const };
-  return { ok: true as const, data };
+  return withAction("loadIssueWorkspace", async () => {
+    const user = await requireUser();
+    const data = loadIssueWorkspace(user, projectId, issueId);
+    if (!data) return { error: "Не знайдено." };
+    return { ok: true as const, data };
+  });
 }
 
 export async function toggleWatcherAction(issueId: string) {
@@ -246,66 +264,67 @@ export async function toggleWatcherAction(issueId: string) {
 }
 
 export async function addIssueLinkAction(formData: FormData) {
-  const user = await requireUser();
-  const fromId = String(formData.get("fromIssueId") || "");
-  const toKey = String(formData.get("toKey") || "").trim().toUpperCase();
-  const rawType = String(formData.get("linkType") || "relates");
-  const from = get<{ id: string; project_id: string; key: string }>(
-    `SELECT id, project_id, key FROM issues WHERE id = ?`,
-    [fromId],
-  );
-  if (!from) return { error: "Не знайдено." };
-  if (!canEditIssues(user, from.project_id)) throw new Error("FORBIDDEN");
-  const to = get<{ id: string; project_id: string; key: string; title: string }>(
-    `SELECT id, project_id, key, title FROM issues WHERE key = ? COLLATE NOCASE`,
-    [toKey],
-  );
-  if (!to || to.project_id !== from.project_id) {
-    return { error: "Задачу з таким ключем не знайдено в проєкті." };
-  }
-  if (to.id === from.id) return { error: "Не можна лінкувати задачу саму на себе." };
+  return withAction("addIssueLink", async () => {
+    const user = await requireUser();
+    const fromId = String(formData.get("fromIssueId") || "");
+    const toKey = String(formData.get("toKey") || "").trim().toUpperCase();
+    const rawType = String(formData.get("linkType") || "relates");
+    const from = get<{ id: string; project_id: string; key: string }>(
+      `SELECT id, project_id, key FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [fromId],
+    );
+    if (!from) return { error: "Не знайдено." };
+    if (!canEditIssues(user, from.project_id)) throw new Error("FORBIDDEN");
+    const to = get<{ id: string; project_id: string; key: string; title: string }>(
+      `SELECT id, project_id, key, title FROM issues WHERE key = ? COLLATE NOCASE AND deleted_at IS NULL`,
+      [toKey],
+    );
+    if (!to || to.project_id !== from.project_id) {
+      return { error: "Задачу з таким ключем не знайдено в проєкті." };
+    }
+    if (to.id === from.id) return { error: "Не можна лінкувати задачу саму на себе." };
 
-  // "is_blocked_by" => reverse blocks link (to blocks from)
-  let linkType: LinkType = "relates";
-  let left = from.id;
-  let right = to.id;
-  if (rawType === "is_blocked_by") {
-    linkType = "blocks";
-    left = to.id;
-    right = from.id;
-  } else if (rawType === "blocks" || rawType === "relates" || rawType === "duplicates") {
-    linkType = rawType;
-  }
+    let linkType: LinkType = "relates";
+    let left = from.id;
+    let right = to.id;
+    if (rawType === "is_blocked_by") {
+      linkType = "blocks";
+      left = to.id;
+      right = from.id;
+    } else if (rawType === "blocks" || rawType === "relates" || rawType === "duplicates") {
+      linkType = rawType;
+    }
 
-  const linkId = createId("lnk");
-  run(
-    `INSERT OR IGNORE INTO issue_links (id, from_issue_id, to_issue_id, link_type, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-    [linkId, left, right, linkType, nowIso()],
-  );
-  logActivity({
-    projectId: from.project_id,
-    issueId: from.id,
-    actorId: user.id,
-    action: "issue.linked",
-    payload: { toKey, linkType: rawType },
+    const linkId = createId("lnk");
+    run(
+      `INSERT OR IGNORE INTO issue_links (id, from_issue_id, to_issue_id, link_type, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [linkId, left, right, linkType, nowIso()],
+    );
+    logActivity({
+      projectId: from.project_id,
+      issueId: from.id,
+      actorId: user.id,
+      action: "issue.linked",
+      payload: { toKey, linkType: rawType },
+    });
+    revalidatePath(`/projects/${from.project_id}/issues/${from.id}`);
+    return {
+      ok: true as const,
+      link: {
+        id: linkId,
+        link_type:
+          rawType === "is_blocked_by"
+            ? "is blocked by"
+            : rawType === "relates"
+              ? "relates"
+              : rawType,
+        other_key: to.key,
+        other_id: to.id,
+        other_title: to.title,
+      },
+    };
   });
-  revalidatePath(`/projects/${from.project_id}/issues/${from.id}`);
-  return {
-    ok: true,
-    link: {
-      id: linkId,
-      link_type:
-        rawType === "is_blocked_by"
-          ? "is blocked by"
-          : rawType === "relates"
-            ? "relates"
-            : rawType,
-      other_key: to.key,
-      other_id: to.id,
-      other_title: to.title,
-    },
-  };
 }
 
 export async function addWorklogAction(formData: FormData) {
@@ -417,41 +436,53 @@ export async function assignToSprintAction(
   issueId: string,
   sprintId: string | null,
 ) {
-  const user = await requireUser();
-  const issue = get<{ project_id: string }>(
-    `SELECT project_id FROM issues WHERE id = ?`,
-    [issueId],
-  );
-  if (!issue) throw new Error("NOT_FOUND");
-  if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
-  updateIssue(issueId, user, { sprintId });
-  revalidatePath(`/projects/${issue.project_id}/backlog`);
-  return { ok: true };
+  return withAction("assignToSprint", async () => {
+    const user = await requireUser();
+    const issue = get<{ project_id: string }>(
+      `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [issueId],
+    );
+    if (!issue) throw new Error("NOT_FOUND");
+    if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
+    updateIssue(issueId, user, { sprintId });
+    revalidatePath(`/projects/${issue.project_id}/backlog`);
+    return { ok: true as const };
+  });
 }
 
 export async function reorderBacklogAction(issueIds: string[]) {
-  const user = await requireUser();
-  if (!issueIds.length) return { ok: true };
-  const first = get<{ project_id: string }>(
-    `SELECT project_id FROM issues WHERE id = ?`,
-    [issueIds[0]],
-  );
-  if (!first) throw new Error("NOT_FOUND");
-  if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
-  const ts = nowIso();
-  const ranks = packedRanks(issueIds.length);
-  withTransaction(() => {
-    issueIds.forEach((id, i) => {
-      run(`UPDATE issues SET rank = ?, updated_at = ? WHERE id = ?`, [
-        ranks[i],
-        ts,
-        id,
-      ]);
+  return withAction("reorderBacklog", async () => {
+    const user = await requireUser();
+    if (!issueIds.length) return { ok: true as const };
+    const first = get<{ project_id: string }>(
+      `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [issueIds[0]],
+    );
+    if (!first) throw new Error("NOT_FOUND");
+    if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
+    const ts = nowIso();
+    const ranks = packedRanks(issueIds.length);
+    withTransaction(() => {
+      issueIds.forEach((id, i) => {
+        const row = get<{ project_id: string }>(
+          `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+          [id],
+        );
+        if (!row || row.project_id !== first.project_id) {
+          throw new Error("FORBIDDEN");
+        }
+        run(`UPDATE issues SET rank = ?, updated_at = ? WHERE id = ? AND project_id = ?`, [
+          ranks[i],
+          ts,
+          id,
+          first.project_id,
+        ]);
+      });
     });
+    bumpBoardVersion(first.project_id);
+    revalidatePath(`/projects/${first.project_id}/backlog`);
+    return { ok: true as const };
   });
-  bumpBoardVersion(first.project_id);
-  revalidatePath(`/projects/${first.project_id}/backlog`);
-  return { ok: true };
 }
 
 export async function updateCommentAction(formData: FormData) {
@@ -578,72 +609,78 @@ export async function deleteIssueLinkAction(linkId: string) {
 }
 
 export async function deleteIssueAction(issueId: string) {
-  const user = await requireUser();
-  const issue = get<{ id: string; project_id: string; key: string }>(
-    `SELECT id, project_id, key FROM issues WHERE id = ?`,
-    [issueId],
-  );
-  if (!issue) return { error: "Не знайдено." };
-  if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
-  const ts = nowIso();
-  run(`UPDATE issues SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-    ts,
-    ts,
-    issueId,
-  ]);
-  logActivity({
-    projectId: issue.project_id,
-    actorId: user.id,
-    action: "issue.deleted",
-    payload: { key: issue.key, issueId },
+  return withAction("deleteIssue", async () => {
+    const user = await requireUser();
+    const issue = get<{ id: string; project_id: string; key: string }>(
+      `SELECT id, project_id, key FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [issueId],
+    );
+    if (!issue) return { error: "Не знайдено." };
+    if (!canEditIssues(user, issue.project_id)) throw new Error("FORBIDDEN");
+    const ts = nowIso();
+    run(`UPDATE issues SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+      ts,
+      ts,
+      issueId,
+    ]);
+    logActivity({
+      projectId: issue.project_id,
+      actorId: user.id,
+      action: "issue.deleted",
+      payload: { key: issue.key, issueId },
+    });
+    logAudit({
+      action: "issue.delete",
+      userId: user.id,
+      login: user.login,
+      detail: issue.key,
+    });
+    bumpBoardVersion(issue.project_id);
+    removeIssueFts(issueId);
+    snapshotProjectSprints(issue.project_id);
+    revalidatePath(`/projects/${issue.project_id}`);
+    revalidatePath(`/projects/${issue.project_id}/trash`);
+    return { ok: true as const, projectId: issue.project_id };
   });
-  logAudit({
-    action: "issue.delete",
-    userId: user.id,
-    login: user.login,
-    detail: issue.key,
-  });
-  bumpBoardVersion(issue.project_id);
-  removeIssueFts(issueId);
-  snapshotProjectSprints(issue.project_id);
-  revalidatePath(`/projects/${issue.project_id}`);
-  revalidatePath(`/projects/${issue.project_id}/trash`);
-  return { ok: true, projectId: issue.project_id };
 }
 
 export async function restoreIssueAction(issueId: string) {
-  const user = await requireUser();
-  const issue = get<{ id: string; project_id: string }>(
-    `SELECT id, project_id FROM issues WHERE id = ?`,
-    [issueId],
-  );
-  if (!issue) return { error: "Не знайдено." };
-  if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
-  run(`UPDATE issues SET deleted_at = NULL, updated_at = ? WHERE id = ?`, [
-    nowIso(),
-    issueId,
-  ]);
-  bumpBoardVersion(issue.project_id);
-  upsertIssueFts(issueId);
-  snapshotProjectSprints(issue.project_id);
-  revalidatePath(`/projects/${issue.project_id}`);
-  revalidatePath(`/projects/${issue.project_id}/trash`);
-  return { ok: true };
+  return withAction("restoreIssue", async () => {
+    const user = await requireUser();
+    const issue = get<{ id: string; project_id: string }>(
+      `SELECT id, project_id FROM issues WHERE id = ? AND deleted_at IS NOT NULL`,
+      [issueId],
+    );
+    if (!issue) return { error: "Не знайдено." };
+    if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
+    run(`UPDATE issues SET deleted_at = NULL, updated_at = ? WHERE id = ?`, [
+      nowIso(),
+      issueId,
+    ]);
+    bumpBoardVersion(issue.project_id);
+    upsertIssueFts(issueId);
+    snapshotProjectSprints(issue.project_id);
+    revalidatePath(`/projects/${issue.project_id}`);
+    revalidatePath(`/projects/${issue.project_id}/trash`);
+    return { ok: true as const };
+  });
 }
 
 export async function purgeIssueAction(issueId: string) {
-  const user = await requireUser();
-  const issue = get<{ id: string; project_id: string }>(
-    `SELECT id, project_id FROM issues WHERE id = ? AND deleted_at IS NOT NULL`,
-    [issueId],
-  );
-  if (!issue) return { error: "Не знайдено." };
-  if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
-  hardDeleteIssue(issueId, issue.project_id);
-  snapshotProjectSprints(issue.project_id);
-  revalidatePath(`/projects/${issue.project_id}`);
-  revalidatePath(`/projects/${issue.project_id}/trash`);
-  return { ok: true };
+  return withAction("purgeIssue", async () => {
+    const user = await requireUser();
+    const issue = get<{ id: string; project_id: string }>(
+      `SELECT id, project_id FROM issues WHERE id = ? AND deleted_at IS NOT NULL`,
+      [issueId],
+    );
+    if (!issue) return { error: "Не знайдено." };
+    if (!canManageProject(user, issue.project_id)) throw new Error("FORBIDDEN");
+    hardDeleteIssue(issueId, issue.project_id);
+    snapshotProjectSprints(issue.project_id);
+    revalidatePath(`/projects/${issue.project_id}`);
+    revalidatePath(`/projects/${issue.project_id}/trash`);
+    return { ok: true as const };
+  });
 }
 
 export async function bulkUpdateIssuesAction(input: {
@@ -652,29 +689,38 @@ export async function bulkUpdateIssuesAction(input: {
   assigneeId?: string | null;
   assigneeIds?: string[];
 }) {
-  const user = await requireUser();
-  if (!input.issueIds.length) return { ok: true };
-  const first = get<{ project_id: string }>(
-    `SELECT project_id FROM issues WHERE id = ?`,
-    [input.issueIds[0]],
-  );
-  if (!first) throw new Error("NOT_FOUND");
-  if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
+  return withAction("bulkUpdateIssues", async () => {
+    const user = await requireUser();
+    if (!input.issueIds.length) return { ok: true as const };
+    const first = get<{ project_id: string }>(
+      `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+      [input.issueIds[0]],
+    );
+    if (!first) throw new Error("NOT_FOUND");
+    if (!canEditIssues(user, first.project_id)) throw new Error("FORBIDDEN");
 
-  withTransaction(() => {
-    for (const id of input.issueIds) {
-      const patch: Parameters<typeof updateIssue>[2] = {};
-      if (input.statusId) patch.statusId = input.statusId;
-      if (input.assigneeIds) patch.assigneeIds = input.assigneeIds;
-      else if (input.assigneeId !== undefined) {
-        patch.assigneeIds = input.assigneeId ? [input.assigneeId] : [];
+    withTransaction(() => {
+      for (const id of input.issueIds) {
+        const row = get<{ project_id: string }>(
+          `SELECT project_id FROM issues WHERE id = ? AND deleted_at IS NULL`,
+          [id],
+        );
+        if (!row || row.project_id !== first.project_id) {
+          throw new Error("FORBIDDEN");
+        }
+        const patch: Parameters<typeof updateIssue>[2] = {};
+        if (input.statusId) patch.statusId = input.statusId;
+        if (input.assigneeIds) patch.assigneeIds = input.assigneeIds;
+        else if (input.assigneeId !== undefined) {
+          patch.assigneeIds = input.assigneeId ? [input.assigneeId] : [];
+        }
+        if (Object.keys(patch).length) updateIssue(id, user, patch);
       }
-      if (Object.keys(patch).length) updateIssue(id, user, patch);
-    }
+    });
+    revalidatePath(`/projects/${first.project_id}`);
+    revalidatePath(`/projects/${first.project_id}/list`);
+    return { ok: true as const };
   });
-  revalidatePath(`/projects/${first.project_id}`);
-  revalidatePath(`/projects/${first.project_id}/list`);
-  return { ok: true };
 }
 
 export async function createSubtaskAction(formData: FormData) {

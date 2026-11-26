@@ -21,7 +21,10 @@ export function BurndownChart({
   const xs = points.map((_, i) => pad + (i * (w - pad * 2)) / Math.max(points.length - 1, 1));
   const y = (v: number) => pad + (1 - v / maxY) * (h - pad * 2);
   const remaining = points.map((p, i) => `${xs[i]},${y(p.remaining_points)}`).join(" ");
-  const idealPts = points.map((p, i) => `${xs[i]},${y(p.ideal ?? 0)}`).join(" ");
+  const idealPts =
+    points.length === 1
+      ? `${pad},${y(committed)} ${w - pad},${y(0)}`
+      : points.map((p, i) => `${xs[i]},${y(p.ideal ?? 0)}`).join(" ");
 
   return (
     <div className="overflow-x-auto">

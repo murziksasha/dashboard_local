@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
-import { createBackupAction, restoreBackupAction } from "@/app/actions/backup";
+import {
+  CreateBackupButton,
+  RestoreBackupButton,
+} from "@/components/admin/backup-controls";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireUser } from "@/lib/auth";
@@ -21,14 +24,7 @@ export default async function AdminBackupsPage() {
             SQLite і знімок папки вкладень.
           </p>
         </div>
-        <form
-          action={async () => {
-            "use server";
-            await createBackupAction();
-          }}
-        >
-          <Button type="submit">Створити бекап зараз</Button>
-        </form>
+        <CreateBackupButton />
       </div>
 
       <Card>
@@ -59,16 +55,7 @@ export default async function AdminBackupsPage() {
                       Завантажити
                     </Button>
                   </a>
-                  <form
-                    action={async () => {
-                      "use server";
-                      await restoreBackupAction(b.name);
-                    }}
-                  >
-                    <Button type="submit" size="sm" variant="danger">
-                      Відновити
-                    </Button>
-                  </form>
+                  <RestoreBackupButton filename={b.name} />
                 </div>
               </div>
             ))

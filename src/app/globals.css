@@ -10,6 +10,8 @@
   --border: #e4e4e7;
   --primary: #0284c7;
   --primary-hover: #0ea5e9;
+  --font-geist-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .dark {

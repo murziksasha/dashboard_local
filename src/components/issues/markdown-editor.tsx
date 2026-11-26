@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { Markdown } from "@/components/markdown";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -24,8 +25,22 @@ export function MarkdownEditor({
   rows?: number;
   split?: boolean;
 }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
   function apply(wrap: [string, string]) {
-    onChange(`${value}${value && !value.endsWith("\n") ? "\n" : ""}${wrap[0]}text${wrap[1]}`);
+    const el = ref.current;
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const selected = value.slice(start, end) || "text";
+    const inserted = `${wrap[0]}${selected}${wrap[1]}`;
+    const next = `${value.slice(0, start)}${inserted}${value.slice(end)}`;
+    onChange(next);
+    requestAnimationFrame(() => {
+      if (!ref.current) return;
+      ref.current.focus();
+      const selStart = start + wrap[0].length;
+      ref.current.setSelectionRange(selStart, selStart + selected.length);
+    });
   }
   return (
     <div className="space-y-2">
@@ -42,7 +57,7 @@ export function MarkdownEditor({
         ))}
       </div>
       <div className={cn(split && "grid gap-2 md:grid-cols-2")}>
-        <Textarea value={value} rows={rows} onChange={(e) => onChange(e.target.value)} />
+        <Textarea ref={ref} value={value} rows={rows} onChange={(e) => onChange(e.target.value)} />
         {split ? (
           <div className="max-h-80 overflow-auto rounded-md border border-zinc-200 p-2 dark:border-zinc-800">
             <Markdown content={value} />

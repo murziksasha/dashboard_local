@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { updateIssueAction } from "@/app/actions/issues";
 import { useIssueDrawer } from "@/components/issues/issue-drawer";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,9 @@ export function CalendarView({
   const openIssue = useIssueDrawer();
   const [, startTransition] = useTransition();
   const [local, setLocal] = useState(issues);
+  useEffect(() => {
+    setLocal(issues);
+  }, [issues]);
 
   const first = new Date(year, month, 1);
   const startWeekday = (first.getDay() + 6) % 7;

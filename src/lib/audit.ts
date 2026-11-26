@@ -58,13 +58,14 @@ export function listAuditEvents(limit = 200): AuditRow[] {
 }
 
 export function countRecentLoginFails(login: string, ip: string): number {
+  const cutoff = new Date(Date.now() - LOGIN_FAIL_WINDOW_MIN * 60_000).toISOString();
   return count(
     `SELECT COUNT(*) as c FROM audit_events
      WHERE action = 'login.fail'
        AND login = ? COLLATE NOCASE
        AND ip = ?
-       AND created_at > datetime('now', ?)`,
-    [login, ip, `-${LOGIN_FAIL_WINDOW_MIN} minutes`],
+       AND created_at > ?`,
+    [login, ip, cutoff],
   );
 }
 

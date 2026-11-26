@@ -22,9 +22,9 @@ export type ProjectShell = {
 };
 
 export function loadProjectShell(user: SessionUser, projectId: string): ProjectShell {
+  assertProjectAccess(user, projectId);
   const project = getProjectById(projectId);
   if (!project || project.archived) notFound();
-  assertProjectAccess(user, projectId);
   const role = getProjectRole(user, projectId)!;
   return {
     project,

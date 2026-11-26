@@ -98,7 +98,7 @@ export function IssueDetailClient(props: {
     note: string | null;
     name: string;
   }>;
-  subtasks?: Array<{ id: string; key: string; title: string; status_name: string }>;
+  subtasks?: Array<{ id: string; key: string; title: string; status_name: string; status_category?: string }>;
   activity?: Array<{
     id: string;
     action: string;
@@ -222,7 +222,9 @@ export function IssueDetailClient(props: {
           <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <h3 className="mb-2 font-semibold">Підзадачі</h3>
             {(() => {
-              const done = subtasks.filter((s) => /done|готово|заверш/i.test(s.status_name)).length;
+              const done = subtasks.filter(
+                (s) => s.status_category === "done" || /done|готово|заверш/i.test(s.status_name),
+              ).length;
               const pct = Math.round((done / subtasks.length) * 100);
               return (
                 <div className="mb-2">
@@ -275,7 +277,9 @@ export function IssueDetailClient(props: {
                 fd.set("body", body);
                 startTransition(async () => {
                   const res = await addCommentAction(fd);
-                  if (res && "comment" in res && res.comment) {
+                  if (res && "error" in res && res.error) {
+                    toast.push(res.error, "error");
+                  } else if (res && "comment" in res && res.comment) {
                     setComments((prev) => [...prev, res.comment]);
                     setCommentDraft("");
                     toast.push("Коментар додано");
@@ -309,14 +313,21 @@ export function IssueDetailClient(props: {
             {activityOpen ? (
               <div className="mt-2 space-y-1">
                 <div className="mb-2 flex flex-wrap gap-1">
-                  {(["all", "comment", "status", "attachment"] as const).map((f) => (
+                  {(
+                    [
+                      ["all", "Усі"],
+                      ["comment", "Коментарі"],
+                      ["status", "Статуси"],
+                      ["attachment", "Файли"],
+                    ] as const
+                  ).map(([f, label]) => (
                     <button
                       key={f}
                       type="button"
                       className={`rounded-full px-2 py-0.5 text-[11px] ${activityFilter === f ? "bg-sky-600 text-white" : "bg-zinc-100 dark:bg-zinc-800"}`}
                       onClick={() => setActivityFilter(f)}
                     >
-                      {f}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -401,7 +412,9 @@ export function IssueDetailClient(props: {
                 type="date"
                 defaultValue={issue.start_date || ""}
                 disabled={!props.canEdit}
-                onBlur={(e) => patch({ start_date: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value !== (issue.start_date || "")) patch({ start_date: e.target.value });
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -410,7 +423,9 @@ export function IssueDetailClient(props: {
                 type="date"
                 defaultValue={issue.due_date || ""}
                 disabled={!props.canEdit}
-                onBlur={(e) => patch({ due_date: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value !== (issue.due_date || "")) patch({ due_date: e.target.value });
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -449,7 +464,11 @@ export function IssueDetailClient(props: {
                 type="number"
                 defaultValue={issue.story_points ?? ""}
                 disabled={!props.canEdit}
-                onBlur={(e) => patch({ story_points: e.target.value })}
+                onBlur={(e) => {
+                  if (e.target.value !== String(issue.story_points ?? "")) {
+                    patch({ story_points: e.target.value });
+                  }
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -462,7 +481,13 @@ export function IssueDetailClient(props: {
                     : ""
                 }
                 disabled={!props.canEdit}
-                onBlur={(e) => patch({ original_estimate: e.target.value })}
+                onBlur={(e) => {
+                  const initial =
+                    issue.original_estimate_sec != null
+                      ? formatDuration(issue.original_estimate_sec)
+                      : "";
+                  if (e.target.value !== initial) patch({ original_estimate: e.target.value });
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -475,7 +500,13 @@ export function IssueDetailClient(props: {
                     : ""
                 }
                 disabled={!props.canEdit}
-                onBlur={(e) => patch({ remaining_estimate: e.target.value })}
+                onBlur={(e) => {
+                  const initial =
+                    issue.remaining_estimate_sec != null
+                      ? formatDuration(issue.remaining_estimate_sec)
+                      : "";
+                  if (e.target.value !== initial) patch({ remaining_estimate: e.target.value });
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -517,7 +548,11 @@ export function IssueDetailClient(props: {
                     }
                     defaultValue={field.value || ""}
                     disabled={!props.canEdit}
-                    onBlur={(e) => patch({ [`cf_${field.id}`]: e.target.value })}
+                    onBlur={(e) => {
+                      if (e.target.value !== (field.value || "")) {
+                        patch({ [`cf_${field.id}`]: e.target.value });
+                      }
+                    }}
                   />
                 )}
               </div>
@@ -534,8 +569,8 @@ export function IssueDetailClient(props: {
             onClick={() =>
               startTransition(async () => {
                 const res = await toggleWatcherAction(issue.id);
-                if (res && "watching" in res) setWatching(!!res.watching);
-                else setWatching((v) => !v);
+                if (res && "error" in res && res.error) toast.push(res.error, "error");
+                else if (res && "watching" in res) setWatching(!!res.watching);
               })
             }
           >
@@ -705,9 +740,9 @@ export function IssueDetailClient(props: {
             onClick={() =>
               startTransition(async () => {
                 const res = await deleteIssueAction(issue.id);
-                if (res?.error) setMsg(res.error ?? "Помилка");
+                if (res && "error" in res && res.error) setMsg(res.error);
                 else if (props.onDeleted) props.onDeleted();
-                else if (res?.projectId) router.push(`/projects/${res.projectId}`);
+                else if (res && "projectId" in res && res.projectId) router.push(`/projects/${res.projectId}`);
               })
             }
           >
